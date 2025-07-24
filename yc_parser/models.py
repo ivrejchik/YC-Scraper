@@ -132,19 +132,27 @@ def validate_company_data(data: Dict[str, Any]) -> List[str]:
     
     # Validate LinkedIn URL format (more flexible)
     linkedin_url = data.get('linkedin_url', '')
-    if linkedin_url:
-        # Accept various LinkedIn URL formats (both HTTP and HTTPS)
-        valid_linkedin_patterns = [
-            'https://www.linkedin.com/company/',
-            'https://linkedin.com/company/',
-            'https://www.linkedin.com/in/',
-            'https://linkedin.com/in/',
-            'http://www.linkedin.com/company/',
-            'http://linkedin.com/company/',
-            'http://www.linkedin.com/in/',
-            'http://linkedin.com/in/'
-        ]
-        if not any(linkedin_url.startswith(pattern) for pattern in valid_linkedin_patterns):
+    if linkedin_url and linkedin_url.strip():  # Only validate non-empty URLs
+        linkedin_url = linkedin_url.strip()
+        
+        # Check if it's a LinkedIn URL (very flexible validation)
+        is_linkedin_url = (
+            'linkedin.com' in linkedin_url.lower() and 
+            (linkedin_url.startswith('http://') or linkedin_url.startswith('https://'))
+        )
+        
+        # Additional check for common LinkedIn patterns
+        if not is_linkedin_url:
+            # Accept various LinkedIn URL formats (both HTTP and HTTPS, with or without www)
+            valid_linkedin_patterns = [
+                'https://www.linkedin.com/',
+                'https://linkedin.com/',
+                'http://www.linkedin.com/',
+                'http://linkedin.com/'
+            ]
+            is_linkedin_url = any(linkedin_url.startswith(pattern) for pattern in valid_linkedin_patterns)
+        
+        if not is_linkedin_url:
             errors.append("LinkedIn URL must be a valid LinkedIn profile or company page")
     
     # Validate description
@@ -152,8 +160,12 @@ def validate_company_data(data: Dict[str, Any]) -> List[str]:
     if description and len(description) > 500:
         errors.append("Description must be 500 characters or less")
     
-    # Validate boolean field
-    yc_s25_flag = data.get('yc_s25_on_linkedin')
+    # Validate boolean field (support both old and new field names)
+    yc_batch_flag = data.get('yc_batch_on_linkedin')
+    yc_s25_flag = data.get('yc_s25_on_linkedin')  # Backward compatibility
+    
+    if yc_batch_flag is not None and not isinstance(yc_batch_flag, bool):
+        errors.append("yc_batch_on_linkedin must be a boolean value")
     if yc_s25_flag is not None and not isinstance(yc_s25_flag, bool):
         errors.append("yc_s25_on_linkedin must be a boolean value")
     

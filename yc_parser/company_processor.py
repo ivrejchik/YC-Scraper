@@ -41,11 +41,18 @@ class CompanyProcessor:
         """
         self.data_manager = DataManager(csv_file_path)
         self.yc_client = YcClient(season=season, year=year)
-        self.linkedin_scraper = LinkedInScraper(delay_range=linkedin_delay_range)
+        
+        # Generate batch code for LinkedIn scraper
+        season_code = "S" if season.lower() == "summer" else "W"
+        year_short = str(year)[-2:]  # Get last 2 digits of year
+        batch_code = f"{season_code}{year_short}"
+        
+        self.linkedin_scraper = LinkedInScraper(delay_range=linkedin_delay_range, batch_code=batch_code)
         
         # Batch parameters
         self.season = season
         self.year = year
+        self.batch_code = batch_code
         
         # Optimization parameters
         self.max_workers = max_workers
@@ -153,8 +160,8 @@ class CompanyProcessor:
             current_time = datetime.now().isoformat()
             for company in companies:
                 company['last_updated'] = current_time
-                # Ensure yc_s25_on_linkedin field exists with default value
-                company.setdefault('yc_s25_on_linkedin', False)
+                # Ensure yc_batch_on_linkedin field exists with default value
+                company.setdefault('yc_batch_on_linkedin', False)
             
             return companies
             
@@ -218,7 +225,7 @@ class CompanyProcessor:
             
             logger.info(f"LinkedIn enrichment completed:")
             logger.info(f"  - Companies processed: {len(enriched_companies)}")
-            logger.info(f"  - YC S25 mentions found: {sum(1 for c in enriched_companies if c.get('yc_s25_on_linkedin', False))}")
+            logger.info(f"  - YC {self.batch_code} mentions found: {sum(1 for c in enriched_companies if c.get('yc_batch_on_linkedin', False))}")
             logger.info(f"  - Errors encountered: {len(errors)}")
             
             return enriched_companies, errors
@@ -235,7 +242,7 @@ class CompanyProcessor:
             fallback_companies = []
             for company in companies:
                 company_copy = company.copy()
-                company_copy['yc_s25_on_linkedin'] = False
+                company_copy['yc_batch_on_linkedin'] = False
                 fallback_companies.append(company_copy)
             
             return fallback_companies, [error_msg]
@@ -266,7 +273,7 @@ class CompanyProcessor:
                 return {
                     'total_companies': 0,
                     'companies_with_linkedin': 0,
-                    'yc_s25_mentions': 0,
+                    'yc_batch_mentions': 0,
                     'last_updated': None,
                     'data_integrity_issues': 0
                 }
@@ -274,7 +281,13 @@ class CompanyProcessor:
             # Calculate statistics
             total_companies = len(existing_data)
             companies_with_linkedin = len(existing_data[(existing_data['linkedin_url'] != '') & (existing_data['linkedin_url'].notna())])
-            yc_s25_mentions = len(existing_data[existing_data['yc_s25_on_linkedin'] == True])
+            
+            # Try both old and new field names for backward compatibility
+            yc_batch_mentions = 0
+            if 'yc_batch_on_linkedin' in existing_data.columns:
+                yc_batch_mentions = len(existing_data[existing_data['yc_batch_on_linkedin'] == True])
+            elif 'yc_s25_on_linkedin' in existing_data.columns:
+                yc_batch_mentions = len(existing_data[existing_data['yc_s25_on_linkedin'] == True])
             
             # Get most recent update time
             last_updated = None
@@ -291,7 +304,7 @@ class CompanyProcessor:
             return {
                 'total_companies': total_companies,
                 'companies_with_linkedin': companies_with_linkedin,
-                'yc_s25_mentions': yc_s25_mentions,
+                'yc_batch_mentions': yc_batch_mentions,
                 'last_updated': last_updated,
                 'data_integrity_issues': data_integrity_issues
             }
@@ -301,7 +314,7 @@ class CompanyProcessor:
             return {
                 'total_companies': 0,
                 'companies_with_linkedin': 0,
-                'yc_s25_mentions': 0,
+                'yc_batch_mentions': 0,
                 'last_updated': None,
                 'data_integrity_issues': 1,
                 'error': str(e)
@@ -425,7 +438,7 @@ class CompanyProcessor:
                 all_errors.extend(batch_errors)
                 
                 # Log batch completion
-                mentions_in_batch = sum(1 for c in batch_enriched if c.get('yc_s25_on_linkedin', False))
+                mentions_in_batch = sum(1 for c in batch_enriched if c.get('yc_batch_on_linkedin', False))
                 logger.info(f"Batch {batch_idx + 1} completed: {mentions_in_batch}/{len(batch)} companies with YC mentions")
                 
             except KeyboardInterrupt:
@@ -440,7 +453,7 @@ class CompanyProcessor:
                 # Add batch companies with False flags on error
                 for company in batch:
                     company_copy = company.copy()
-                    company_copy['yc_s25_on_linkedin'] = False
+                    company_copy['yc_batch_on_linkedin'] = False
                     all_enriched_companies.append(company_copy)
         
         return all_enriched_companies, all_errors
@@ -599,8 +612,8 @@ class CompanyProcessor:
         if linkedin_delay_range is not None:
             if len(linkedin_delay_range) == 2 and linkedin_delay_range[0] <= linkedin_delay_range[1]:
                 self.linkedin_delay_range = linkedin_delay_range
-                # Update LinkedIn scraper with new delay range
-                self.linkedin_scraper = LinkedInScraper(delay_range=linkedin_delay_range)
+                # Update LinkedIn scraper with new delay range and correct batch code
+                self.linkedin_scraper = LinkedInScraper(delay_range=linkedin_delay_range, batch_code=self.batch_code)
                 logger.info(f"Updated linkedin_delay_range to {self.linkedin_delay_range}")
             else:
                 logger.warning("Invalid linkedin_delay_range, keeping current value")

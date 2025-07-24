@@ -31,6 +31,33 @@ if 'error_count' not in st.session_state:
 if 'last_error' not in st.session_state:
     st.session_state.last_error = None
 
+def _normalize_linkedin_field(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Normalize LinkedIn field names for backward compatibility.
+    
+    Args:
+        df: DataFrame with company data
+        
+    Returns:
+        DataFrame with normalized field names
+    """
+    if df.empty:
+        return df
+    
+    # Handle backward compatibility for LinkedIn field names
+    if 'yc_batch_on_linkedin' in df.columns and 'yc_s25_on_linkedin' not in df.columns:
+        # New field exists, create alias for old field name for compatibility
+        df['yc_s25_on_linkedin'] = df['yc_batch_on_linkedin']
+    elif 'yc_s25_on_linkedin' in df.columns and 'yc_batch_on_linkedin' not in df.columns:
+        # Old field exists, create new field name
+        df['yc_batch_on_linkedin'] = df['yc_s25_on_linkedin']
+    elif 'yc_batch_on_linkedin' not in df.columns and 'yc_s25_on_linkedin' not in df.columns:
+        # Neither field exists, create both with default values
+        df['yc_s25_on_linkedin'] = False
+        df['yc_batch_on_linkedin'] = False
+    
+    return df
+
 def load_company_data() -> pd.DataFrame:
     """
     Load existing company data from CSV file with comprehensive error handling.
@@ -46,6 +73,9 @@ def load_company_data() -> pd.DataFrame:
         if df.empty:
             logger.info("No existing company data found")
             return df
+        
+        # Normalize field names for backward compatibility
+        df = _normalize_linkedin_field(df)
         
         logger.info(f"Successfully loaded {len(df)} companies from CSV")
         return df

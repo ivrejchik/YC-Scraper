@@ -21,16 +21,18 @@ class LinkedInScraper:
     to respectfully access LinkedIn pages.
     """
     
-    def __init__(self, delay_range: tuple = (1, 2), max_retries: int = 3):
+    def __init__(self, delay_range: tuple = (1, 2), max_retries: int = 3, batch_code: str = "S25"):
         """
         Initialize the LinkedIn scraper.
         
         Args:
             delay_range: Tuple of (min, max) seconds to wait between requests
             max_retries: Maximum number of retry attempts for failed requests
+            batch_code: YC batch code to search for (e.g., "S25", "S24", "W24")
         """
         self.delay_range = delay_range
         self.max_retries = max_retries
+        self.batch_code = batch_code
         self.session = requests.Session()
         
         # Set up proper headers to avoid blocking
@@ -206,10 +208,10 @@ class LinkedInScraper:
     
     def check_yc_mention(self, linkedin_url: str) -> bool:
         """
-        Check if a LinkedIn company page mentions "YC S25".
+        Check if a LinkedIn company page mentions the YC batch (e.g., "YC S25", "YC S24", "YC W24").
         
         Handles various HTML structures and text encodings by:
-        - Searching for multiple variations of the YC S25 phrase
+        - Searching for multiple variations of the YC batch phrase
         - Handling HTML entities and special characters
         - Case-insensitive matching
         
@@ -217,7 +219,7 @@ class LinkedInScraper:
             linkedin_url: LinkedIn company page URL
             
         Returns:
-            True if "YC S25" is found, False otherwise
+            True if YC batch mention is found, False otherwise
         """
         if not linkedin_url or not linkedin_url.strip():
             logger.debug("No LinkedIn URL provided")
@@ -231,29 +233,36 @@ class LinkedInScraper:
         
         # Convert to lowercase for case-insensitive search
         content_lower = html_content.lower()
+        batch_lower = self.batch_code.lower()
         
-        # Define various patterns to search for YC S25 mentions
+        # Extract season and year from batch code for alternative formats
+        season_map = {'s': 'summer', 'w': 'winter'}
+        season_full = season_map.get(batch_lower[0], 'summer')
+        year_short = batch_lower[1:]
+        year_full = f"20{year_short}"
+        
+        # Define various patterns to search for YC batch mentions
         yc_patterns = [
-            "yc s25",           # Standard format
-            "yc&nbsp;s25",      # With HTML non-breaking space
-            "yc s25",           # With regular space
-            "yc  s25",          # With multiple spaces
-            "yc\ns25",          # With newline
-            "yc\ts25",          # With tab
-            "y combinator s25", # Full name
-            "y&nbsp;combinator&nbsp;s25",  # Full name with HTML spaces
-            "ycombinator s25",  # No space in YC
-            "yc summer 2025",   # Alternative format
-            "yc summer '25",    # Alternative format with quote
-            "yc summer 25",     # Alternative format without quote
-            "yc batch s25",     # With batch mention
-            "yc class s25",     # With class mention
+            f"yc {batch_lower}",           # Standard format (e.g., "yc s24")
+            f"yc&nbsp;{batch_lower}",      # With HTML non-breaking space
+            f"yc {batch_lower}",           # With regular space
+            f"yc  {batch_lower}",          # With multiple spaces
+            f"yc\n{batch_lower}",          # With newline
+            f"yc\t{batch_lower}",          # With tab
+            f"y combinator {batch_lower}", # Full name
+            f"y&nbsp;combinator&nbsp;{batch_lower}",  # Full name with HTML spaces
+            f"ycombinator {batch_lower}",  # No space in YC
+            f"yc {season_full} {year_full}",   # Alternative format (e.g., "yc summer 2024")
+            f"yc {season_full} '{year_short}",    # Alternative format with quote (e.g., "yc summer '24")
+            f"yc {season_full} {year_short}",     # Alternative format without quote (e.g., "yc summer 24")
+            f"yc batch {batch_lower}",     # With batch mention
+            f"yc class {batch_lower}",     # With class mention
         ]
         
         # Search for any of the patterns
         for pattern in yc_patterns:
             if pattern in content_lower:
-                logger.info(f"Found YC S25 mention (pattern: '{pattern}') on {linkedin_url}")
+                logger.info(f"Found YC {self.batch_code} mention (pattern: '{pattern}') on {linkedin_url}")
                 return True
         
         # Additional check for HTML-encoded content
@@ -262,18 +271,18 @@ class LinkedInScraper:
             decoded_content = html.unescape(content_lower)
             for pattern in yc_patterns[:5]:  # Check main patterns on decoded content
                 if pattern in decoded_content:
-                    logger.info(f"Found YC S25 mention in decoded HTML (pattern: '{pattern}') on {linkedin_url}")
+                    logger.info(f"Found YC {self.batch_code} mention in decoded HTML (pattern: '{pattern}') on {linkedin_url}")
                     return True
         except Exception as e:
             logger.debug(f"Could not decode HTML entities: {e}")
         
-        logger.debug(f"No YC S25 mention found on {linkedin_url}")
+        logger.debug(f"No YC {self.batch_code} mention found on {linkedin_url}")
         return False
     
     def batch_check_mentions(self, companies: List[Dict[str, Any]], max_workers: int = 3, 
                            progress_callback=None) -> tuple[List[Dict[str, Any]], List[str]]:
         """
-        Check multiple companies for YC S25 mentions using parallel processing.
+        Check multiple companies for YC batch mentions using parallel processing.
         
         Features:
         - Parallel execution with configurable worker count
@@ -288,7 +297,7 @@ class LinkedInScraper:
             
         Returns:
             Tuple of (processed_companies, error_messages)
-            - processed_companies: List of company dictionaries with 'yc_s25_on_linkedin' field added
+            - processed_companies: List of company dictionaries with 'yc_batch_on_linkedin' field added
             - error_messages: List of error messages encountered during processing
         """
         if not companies:
@@ -315,7 +324,7 @@ class LinkedInScraper:
                 
                 # Create a copy of the company data with the new field
                 updated_company = company.copy()
-                updated_company['yc_s25_on_linkedin'] = yc_mention
+                updated_company['yc_batch_on_linkedin'] = yc_mention
                 
                 # Update progress
                 completed_count += 1
@@ -343,7 +352,7 @@ class LinkedInScraper:
                 
                 # Return company with False flag on error
                 updated_company = company.copy()
-                updated_company['yc_s25_on_linkedin'] = False
+                updated_company['yc_batch_on_linkedin'] = False
                 return updated_company
         
         logger.info(f"Starting batch processing of {total_count} companies with {max_workers} workers")
@@ -371,7 +380,7 @@ class LinkedInScraper:
                         
                         # Add company with False flag
                         updated_company = company.copy()
-                        updated_company['yc_s25_on_linkedin'] = False
+                        updated_company['yc_batch_on_linkedin'] = False
                         results.append(updated_company)
                         
         except Exception as e:
@@ -384,17 +393,17 @@ class LinkedInScraper:
             for company in companies:
                 if company.get('name') not in processed_names:
                     updated_company = company.copy()
-                    updated_company['yc_s25_on_linkedin'] = False
+                    updated_company['yc_batch_on_linkedin'] = False
                     results.append(updated_company)
         
         # Log summary
-        success_count = len([r for r in results if r.get('yc_s25_on_linkedin', False)])
+        success_count = len([r for r in results if r.get('yc_batch_on_linkedin', False)])
         error_count = len(errors)
         
         logger.info(f"Batch processing completed:")
         logger.info(f"  - Total companies: {total_count}")
         logger.info(f"  - Successfully processed: {len(results)}")
-        logger.info(f"  - YC S25 mentions found: {success_count}")
+        logger.info(f"  - YC {self.batch_code} mentions found: {success_count}")
         logger.info(f"  - Errors encountered: {error_count}")
         
         if errors:
