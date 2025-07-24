@@ -1,0 +1,41 @@
+[global]
+# Streamlit configuration for YC Company Parser
+
+# Development mode settings
+developmentMode = false
+
+# Server settings
+[server]
+# Port for local development (Streamlit Cloud will override this)
+port = 8501
+
+# Enable CORS for API requests
+enableCORS = false
+
+# Enable XSS protection
+enableXsrfProtection = true
+
+# Max upload size (not needed for this app but good to have)
+maxUploadSize = 200
+
+# Browser settings
+[browser]
+# Automatically open browser on local run
+gatherUsageStats = false
+
+# Theme settings
+[theme]
+# Use system theme by default (supports both light and dark mode)
+base = "light"
+primaryColor = "#FF6B35"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F0F2F6"
+textColor = "#262730"
+
+# UI settings
+[ui]
+# Hide the hamburger menu
+hideTopBar = false
+
+# Hide the footer
+hideSidebarNav = false
