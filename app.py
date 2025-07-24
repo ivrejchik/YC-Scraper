@@ -58,6 +58,105 @@ def _normalize_linkedin_field(df: pd.DataFrame) -> pd.DataFrame:
     
     return df
 
+def _get_available_batches() -> list[str]:
+    """
+    Get list of available YC batches from CSV files.
+    
+    Returns:
+        List of batch codes like ["S25", "W25", etc.]
+    """
+    import os
+    import glob
+    
+    available_batches = []
+    
+    # Look for CSV files matching the pattern yc_*_companies.csv
+    csv_files = glob.glob("yc_*_companies.csv")
+    
+    for csv_file in csv_files:
+        # Extract batch code from filename (e.g., yc_w25_companies.csv -> W25)
+        try:
+            batch_part = csv_file.replace("yc_", "").replace("_companies.csv", "")
+            if len(batch_part) >= 3:
+                # Convert to uppercase (e.g., w25 -> W25)
+                batch_code = batch_part.upper()
+                available_batches.append(batch_code)
+        except:
+            continue
+    
+    # Sort batches (most recent first)
+    available_batches.sort(reverse=True)
+    
+    # If no batches found, default to S25
+    if not available_batches:
+        available_batches = ["S25"]
+    
+    return available_batches
+
+def _detect_current_batch() -> str:
+    """
+    Detect the current YC batch from session state, available files, or default to S25.
+    
+    Returns:
+        Batch code like "S25", "W25", etc.
+    """
+    # Check if we have batch info in session state (from refresh_data)
+    if hasattr(st.session_state, 'current_batch_code'):
+        return st.session_state.current_batch_code
+    
+    # Check if we have season/year in session state
+    if hasattr(st.session_state, 'current_season') and hasattr(st.session_state, 'current_year'):
+        season_code = "S" if st.session_state.current_season.lower() == "summer" else "W"
+        year_short = str(st.session_state.current_year)[-2:]
+        return f"{season_code}{year_short}"
+    
+    # Check if user has selected a batch in the UI
+    if hasattr(st.session_state, 'selected_batch') and st.session_state.selected_batch:
+        return st.session_state.selected_batch
+    
+    # Auto-detect from available CSV files (use most recent)
+    available_batches = _get_available_batches()
+    if available_batches:
+        return available_batches[0]  # Most recent batch
+    
+    # Default to S25 for backward compatibility
+    return "S25"
+
+def _get_current_batch_params() -> tuple[str, int]:
+    """
+    Get the current batch season and year from session state.
+    
+    Returns:
+        Tuple of (season, year)
+    """
+    # Check if we have season/year in session state
+    if hasattr(st.session_state, 'current_season') and hasattr(st.session_state, 'current_year'):
+        return st.session_state.current_season, st.session_state.current_year
+    
+    # Default to Summer 2025 for backward compatibility
+    return "Summer", 2025
+
+def _get_batch_display_name(batch_code: str) -> str:
+    """
+    Convert batch code to display name.
+    
+    Args:
+        batch_code: Batch code like "S25", "W25"
+        
+    Returns:
+        Display name like "Summer 2025", "Winter 2025"
+    """
+    if len(batch_code) < 3:
+        return batch_code
+    
+    season_code = batch_code[0].upper()
+    year_short = batch_code[1:]
+    
+    season_name = "Summer" if season_code == "S" else "Winter"
+    year_full = f"20{year_short}"
+    
+    return f"{season_name} {year_full}"
+
 def load_company_data() -> pd.DataFrame:
     """
     Load existing company data from CSV file with comprehensive error handling.
@@ -67,17 +166,22 @@ def load_company_data() -> pd.DataFrame:
     """
     try:
         logger.info("Loading company data from CSV file")
-        data_manager = DataManager()
+        
+        # Detect current batch and use appropriate CSV file
+        current_batch = _detect_current_batch()
+        csv_filename = f"yc_{current_batch.lower()}_companies.csv"
+        
+        data_manager = DataManager(csv_filename)
         df = data_manager.load_existing_data()
         
         if df.empty:
-            logger.info("No existing company data found")
+            logger.info(f"No existing company data found for {current_batch}")
             return df
         
         # Normalize field names for backward compatibility
         df = _normalize_linkedin_field(df)
         
-        logger.info(f"Successfully loaded {len(df)} companies from CSV")
+        logger.info(f"Successfully loaded {len(df)} companies from {csv_filename}")
         return df
         
     except FileNotFoundError:
@@ -173,7 +277,16 @@ def _validate_and_repair_data():
     """Validate data integrity and attempt repairs."""
     try:
         with st.spinner("Validating data integrity..."):
-            processor = CompanyProcessor()
+            # Get current batch parameters from session state
+            season, year = _get_current_batch_params()
+            batch_code = _detect_current_batch()
+            csv_filename = f"yc_{batch_code.lower()}_companies.csv"
+            
+            processor = CompanyProcessor(
+                csv_file_path=csv_filename,
+                season=season,
+                year=year
+            )
             result = processor.validate_data_integrity()
             
             if result.success:
@@ -243,7 +356,16 @@ def _create_manual_backup():
     """Create a manual backup of the current data."""
     try:
         with st.spinner("Creating backup..."):
-            processor = CompanyProcessor()
+            # Get current batch parameters from session state
+            season, year = _get_current_batch_params()
+            batch_code = _detect_current_batch()
+            csv_filename = f"yc_{batch_code.lower()}_companies.csv"
+            
+            processor = CompanyProcessor(
+                csv_file_path=csv_filename,
+                season=season,
+                year=year
+            )
             backup_name = f"manual_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             backup_path = processor.create_data_backup(backup_name)
             st.success(f"✅ Backup created: {backup_path}")
@@ -259,7 +381,16 @@ def _show_system_status():
     """Display system status and diagnostics."""
     try:
         with st.spinner("Checking system status..."):
-            processor = CompanyProcessor()
+            # Get current batch parameters from session state
+            season, year = _get_current_batch_params()
+            batch_code = _detect_current_batch()
+            csv_filename = f"yc_{batch_code.lower()}_companies.csv"
+            
+            processor = CompanyProcessor(
+                csv_file_path=csv_filename,
+                season=season,
+                year=year
+            )
             stats = processor.get_processing_statistics()
             
             st.subheader("📊 System Status")
@@ -269,7 +400,7 @@ def _show_system_status():
             with col1:
                 st.metric("Total Companies", stats.get('total_companies', 0))
                 st.metric("Companies with LinkedIn", stats.get('companies_with_linkedin', 0))
-                st.metric("YC S25 Mentions", stats.get('yc_s25_mentions', 0))
+                st.metric(f"YC {batch_code} Mentions", stats.get('yc_batch_mentions', 0))
             
             with col2:
                 st.metric("Data Integrity Issues", stats.get('data_integrity_issues', 0))
@@ -345,7 +476,8 @@ def apply_filters_and_sorting(df: pd.DataFrame, search_term: str, linkedin_filte
         filtered_df = filtered_df[(filtered_df['linkedin_url'] != '') & (filtered_df['linkedin_url'].notna())]
     elif linkedin_filter == "No LinkedIn":
         filtered_df = filtered_df[(filtered_df['linkedin_url'] == '') | (filtered_df['linkedin_url'].isna())]
-    elif linkedin_filter == "YC S25 Mention":
+    elif "YC" in linkedin_filter and "Mention" in linkedin_filter:
+        # Use the normalized field that should exist in the dataframe
         filtered_df = filtered_df[filtered_df['yc_s25_on_linkedin'] == True]
     elif linkedin_filter == "No YC Mention":
         filtered_df = filtered_df[filtered_df['yc_s25_on_linkedin'] == False]
@@ -380,7 +512,10 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
     # Prepare data for display
     display_df = df.copy()
     
-    # Format YC S25 LinkedIn flag as Yes/No
+    # Get current batch for display
+    current_batch = _detect_current_batch()
+    
+    # Format YC batch LinkedIn flag as Yes/No (use normalized field)
     display_df['yc_s25_on_linkedin'] = display_df['yc_s25_on_linkedin'].map({
         True: "Yes", 
         False: "No"
@@ -415,7 +550,7 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
         'Description', 
         'YC Profile', 
         'LinkedIn', 
-        'YC S25 Mention'
+        f'YC {current_batch} Mention'
     ]
     
     # Display the table with HTML rendering for clickable links
@@ -533,7 +668,8 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
     with col3:
         yc_mentions = len(df[df['yc_s25_on_linkedin'] == True])
         mention_percentage = (yc_mentions / len(df) * 100) if len(df) > 0 else 0
-        st.metric("YC S25 Mentions", yc_mentions, f"{mention_percentage:.1f}%")
+        current_batch = _detect_current_batch()
+        st.metric(f"YC {current_batch} Mentions", yc_mentions, f"{mention_percentage:.1f}%")
     
     with col4:
         companies_with_websites = len(df[(df['website'] != '') & (df['website'].notna())])
@@ -549,7 +685,7 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
         with insight_col1:
             if yc_mentions > 0:
                 mention_rate = (yc_mentions / companies_with_linkedin * 100) if companies_with_linkedin > 0 else 0
-                st.info(f"📈 **{mention_rate:.1f}%** of companies with LinkedIn mention YC S25")
+                st.info(f"📈 **{mention_rate:.1f}%** of companies with LinkedIn mention YC {current_batch}")
             
             if companies_with_websites > 0:
                 st.info(f"🌐 **{website_percentage:.1f}%** of companies have websites listed")
@@ -558,7 +694,7 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
             # Show top companies with YC mentions (if any)
             yc_mention_companies = df[df['yc_s25_on_linkedin'] == True]
             if len(yc_mention_companies) > 0:
-                st.success(f"✅ **{len(yc_mention_companies)}** companies actively promote their YC S25 status")
+                st.success(f"✅ **{len(yc_mention_companies)}** companies actively promote their YC {current_batch} status")
             
             # Data completeness
             complete_profiles = len(df[
@@ -586,6 +722,11 @@ def refresh_data(season: str = "Summer", year: int = 2025) -> bool:
     try:
         batch_code = f"{'S' if season == 'Summer' else 'W'}{str(year)[2:]}"
         logger.info(f"Starting data refresh process for {batch_code} ({season} {year})")
+        
+        # Store current batch info in session state for other functions to use
+        st.session_state.current_season = season
+        st.session_state.current_year = year
+        st.session_state.current_batch_code = batch_code
         
         # Initialize progress tracking
         progress_bar = st.progress(0)
@@ -651,7 +792,8 @@ def refresh_data(season: str = "Summer", year: int = 2025) -> bool:
                     if not df.empty:
                         yc_mentions = len(df[df['yc_s25_on_linkedin'] == True])
                         if yc_mentions > 0:
-                            st.info(f"🎯 Found {yc_mentions} companies with YC S25 LinkedIn mentions!")
+                            current_batch = _detect_current_batch()
+                            st.info(f"🎯 Found {yc_mentions} companies with YC {current_batch} LinkedIn mentions!")
                 except Exception as e:
                     logger.warning(f"Failed to calculate LinkedIn statistics: {e}")
                 
@@ -791,10 +933,6 @@ def main():
     
     st.caption(f"Fetching data for {season} {year} batch ({batch_code})")
     
-    # Note about current API limitation
-    if batch_code != "S25":
-        st.warning(f"⚠️ **Note**: Currently only S25 (Summer 2025) data is available. The API endpoint for {batch_code} may not exist yet.")
-        st.info("💡 The app will attempt to fetch data for the selected batch, but may fall back to available data.")
     
     # Show error recovery options if there have been errors
     _show_error_recovery_options()
@@ -824,9 +962,10 @@ def main():
             
             with filter_col2:
                 # LinkedIn filter
+                current_batch = _detect_current_batch()
                 linkedin_filter = st.selectbox(
                     "🔗 LinkedIn Status",
-                    options=["All", "Has LinkedIn", "No LinkedIn", "YC S25 Mention", "No YC Mention"],
+                    options=["All", "Has LinkedIn", "No LinkedIn", f"YC {current_batch} Mention", "No YC Mention"],
                     help="Filter by LinkedIn presence and YC mentions"
                 )
             
