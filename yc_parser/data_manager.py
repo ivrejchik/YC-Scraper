@@ -1,5 +1,5 @@
 """
-Data persistence layer for the YC S25 Company Parser.
+Data persistence layer for the YC Company Parser.
 
 This module handles CSV data operations including loading, saving, deduplication,
 and data validation for company records.
@@ -8,11 +8,14 @@ and data validation for company records.
 import pandas as pd
 import os
 import shutil
+import logging
 from datetime import datetime
 from typing import List, Dict, Any, Tuple, Optional
 from pathlib import Path
 
 from .models import Company, validate_company_data, ProcessingResult
+
+logger = logging.getLogger(__name__)
 
 
 class DataManager:
@@ -348,7 +351,7 @@ class DataManager:
         """Create empty DataFrame with proper column structure."""
         columns = [
             'name', 'website', 'description', 'yc_page', 
-            'linkedin_url', 'yc_s25_on_linkedin', 'last_updated'
+            'linkedin_url', 'yc_s25_on_linkedin', 'linkedin_only', 'last_updated'
         ]
         return pd.DataFrame(columns=columns)
     
@@ -356,9 +359,15 @@ class DataManager:
         """Validate that DataFrame has the expected column structure."""
         expected_columns = {
             'name', 'website', 'description', 'yc_page', 
+            'linkedin_url', 'yc_s25_on_linkedin', 'linkedin_only', 'last_updated'
+        }
+        # Allow for backward compatibility - if linkedin_only is missing, that's okay
+        df_columns = set(df.columns)
+        required_columns = {
+            'name', 'website', 'description', 'yc_page', 
             'linkedin_url', 'yc_s25_on_linkedin', 'last_updated'
         }
-        return set(df.columns) == expected_columns
+        return required_columns.issubset(df_columns)
     
     def _validate_dataframe_data(self, df: pd.DataFrame) -> List[str]:
         """Validate data in each row of DataFrame."""
@@ -380,7 +389,7 @@ class DataManager:
         # Ensure proper column order
         column_order = [
             'name', 'website', 'description', 'yc_page', 
-            'linkedin_url', 'yc_s25_on_linkedin', 'last_updated'
+            'linkedin_url', 'yc_s25_on_linkedin', 'linkedin_only', 'last_updated'
         ]
         
         # Reorder columns and ensure all required columns exist
@@ -393,6 +402,7 @@ class DataManager:
         df_prepared['yc_page'] = df_prepared['yc_page'].fillna('')
         df_prepared['linkedin_url'] = df_prepared['linkedin_url'].fillna('')
         df_prepared['yc_s25_on_linkedin'] = df_prepared['yc_s25_on_linkedin'].fillna(False)
+        df_prepared['linkedin_only'] = df_prepared['linkedin_only'].fillna(False)
         df_prepared['last_updated'] = df_prepared['last_updated'].fillna(datetime.now().isoformat())
         
         return df_prepared
@@ -691,6 +701,521 @@ class DataManager:
         shutil.copy2(self.csv_file_path, backup_path)
         
         return backup_path
+    
+    def merge_discovery_results(self, discovery_companies: List[Any], 
+                              existing_df: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        """
+        Merge LinkedIn discovery results with existing data.
+        
+        This method handles the integration of discovered LinkedIn companies
+        with existing YC data, performing deduplication and data validation.
+        
+        Args:
+            discovery_companies: List of Company objects from discovery process
+            existing_df: Optional existing DataFrame (loads from file if None)
+            
+        Returns:
+            DataFrame with merged and deduplicated data
+        """
+        logger.info(f"Merging {len(discovery_companies)} discovery results with existing data")
+        
+        # Load existing data if not provided
+        if existing_df is None:
+            existing_df = self.load_existing_data()
+        
+        # Convert discovery companies to dictionaries
+        discovery_data = []
+        for company in discovery_companies:
+            if hasattr(company, 'to_dict'):
+                discovery_data.append(company.to_dict())
+            elif isinstance(company, dict):
+                discovery_data.append(company)
+            else:
+                logger.warning(f"Skipping invalid company object: {type(company)}")
+                continue
+        
+        if not discovery_data:
+            logger.info("No valid discovery data to merge")
+            return existing_df
+        
+        # Create DataFrame from discovery data
+        discovery_df = pd.DataFrame(discovery_data)
+        
+        # Ensure proper column structure
+        discovery_df = self._prepare_dataframe_for_save(discovery_df)
+        
+        # If existing data is empty, return discovery data
+        if existing_df.empty:
+            logger.info("No existing data, returning discovery results")
+            return discovery_df
+        
+        # Perform advanced deduplication with discovery-specific logic
+        merged_df = self._merge_with_discovery_deduplication(existing_df, discovery_df)
+        
+        logger.info(f"Merge completed: {len(merged_df)} total companies")
+        return merged_df
+    
+    def _merge_with_discovery_deduplication(self, existing_df: pd.DataFrame, 
+                                          discovery_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Merge existing data with discovery results using advanced deduplication.
+        
+        This method implements discovery-specific deduplication logic:
+        1. Match by exact LinkedIn URL first
+        2. Match by company name similarity
+        3. Resolve conflicts by preferring more complete data
+        4. Add truly new companies
+        
+        Args:
+            existing_df: DataFrame with existing company data
+            discovery_df: DataFrame with discovery results
+            
+        Returns:
+            DataFrame with merged and deduplicated data
+        """
+        logger.info("Performing discovery-specific deduplication")
+        
+        # Create working copies
+        existing_copy = existing_df.copy()
+        discovery_copy = discovery_df.copy()
+        
+        # Track which discovery companies have been matched
+        matched_discovery_indices = set()
+        updated_existing_indices = set()
+        
+        # Phase 1: Match by LinkedIn URL (exact matches)
+        logger.debug("Phase 1: Matching by LinkedIn URL")
+        for disc_idx, disc_row in discovery_copy.iterrows():
+            disc_linkedin = disc_row.get('linkedin_url', '').strip()
+            if not disc_linkedin:
+                continue
+                
+            # Find existing companies with same LinkedIn URL
+            # Convert to string and handle NaN values
+            existing_linkedin_urls = existing_copy['linkedin_url'].astype(str).str.strip()
+            existing_matches = existing_copy[existing_linkedin_urls == disc_linkedin]
+            
+            if not existing_matches.empty:
+                # Update existing company with discovery data
+                existing_idx = existing_matches.index[0]
+                existing_copy.loc[existing_idx] = self._merge_company_records(
+                    existing_copy.loc[existing_idx], disc_row
+                )
+                matched_discovery_indices.add(disc_idx)
+                updated_existing_indices.add(existing_idx)
+                logger.debug(f"LinkedIn URL match: {disc_row.get('name', 'Unknown')}")
+        
+        # Phase 2: Match by company name similarity
+        logger.debug("Phase 2: Matching by company name similarity")
+        unmatched_discovery = discovery_copy.drop(matched_discovery_indices)
+        
+        for disc_idx, disc_row in unmatched_discovery.iterrows():
+            disc_name = disc_row.get('name', '').strip().lower()
+            if not disc_name:
+                continue
+            
+            best_match_idx = None
+            best_similarity = 0.0
+            
+            # Find best name match in existing data (excluding already updated)
+            for exist_idx, exist_row in existing_copy.iterrows():
+                if exist_idx in updated_existing_indices:
+                    continue
+                    
+                exist_name = exist_row.get('name', '').strip().lower()
+                if not exist_name:
+                    continue
+                
+                # Calculate similarity
+                similarity = self._calculate_name_similarity(disc_name, exist_name)
+                
+                if similarity > best_similarity and similarity >= 0.85:  # High threshold for name matching
+                    best_similarity = similarity
+                    best_match_idx = exist_idx
+            
+            # If good match found, merge the records
+            if best_match_idx is not None:
+                existing_copy.loc[best_match_idx] = self._merge_company_records(
+                    existing_copy.loc[best_match_idx], disc_row
+                )
+                matched_discovery_indices.add(disc_idx)
+                updated_existing_indices.add(best_match_idx)
+                logger.debug(f"Name match ({best_similarity:.2f}): {disc_row.get('name', 'Unknown')}")
+        
+        # Phase 3: Add truly new companies
+        logger.debug("Phase 3: Adding new companies")
+        new_companies = discovery_copy.drop(matched_discovery_indices)
+        
+        if not new_companies.empty:
+            # Combine existing (possibly updated) with new companies
+            merged_df = pd.concat([existing_copy, new_companies], ignore_index=True)
+            logger.info(f"Added {len(new_companies)} new companies from discovery")
+        else:
+            merged_df = existing_copy
+            logger.info("No new companies to add from discovery")
+        
+        # Final cleanup and validation
+        merged_df = self._prepare_dataframe_for_save(merged_df)
+        
+        logger.info(f"Discovery deduplication complete: "
+                   f"{len(updated_existing_indices)} updated, "
+                   f"{len(new_companies)} new, "
+                   f"{len(merged_df)} total")
+        
+        return merged_df
+    
+    def _merge_company_records(self, existing_record: pd.Series, 
+                             discovery_record: pd.Series) -> pd.Series:
+        """
+        Merge two company records, preferring more complete data.
+        
+        Args:
+            existing_record: Existing company record
+            discovery_record: Discovery company record
+            
+        Returns:
+            Merged company record
+        """
+        merged = existing_record.copy()
+        
+        # Fields to merge (prefer non-empty values from discovery)
+        mergeable_fields = ['website', 'description', 'linkedin_url']
+        
+        for field in mergeable_fields:
+            # Handle NaN values by converting to string first
+            existing_raw = existing_record.get(field, '')
+            discovery_raw = discovery_record.get(field, '')
+            
+            existing_value = str(existing_raw).strip() if pd.notna(existing_raw) else ''
+            discovery_value = str(discovery_raw).strip() if pd.notna(discovery_raw) else ''
+            
+            # Prefer discovery value if existing is empty or discovery is more complete
+            if not existing_value and discovery_value:
+                merged[field] = discovery_value
+            elif discovery_value and len(discovery_value) > len(existing_value):
+                # Prefer longer descriptions/more complete data
+                if field == 'description':
+                    merged[field] = discovery_value
+        
+        # Always update timestamp to reflect the merge
+        merged['last_updated'] = datetime.now().isoformat()
+        
+        # Special handling for YC page - preserve existing if present
+        existing_yc_raw = existing_record.get('yc_page', '')
+        existing_yc_page = str(existing_yc_raw).strip() if pd.notna(existing_yc_raw) else ''
+        
+        if not existing_yc_page:
+            discovery_yc_raw = discovery_record.get('yc_page', '')
+            discovery_yc_page = str(discovery_yc_raw).strip() if pd.notna(discovery_yc_raw) else ''
+            if discovery_yc_page:
+                merged['yc_page'] = discovery_yc_page
+        
+        return merged
+    
+    def _calculate_name_similarity(self, name1: str, name2: str) -> float:
+        """
+        Calculate similarity between two company names.
+        
+        Uses multiple similarity metrics and normalization for better matching.
+        
+        Args:
+            name1: First company name
+            name2: Second company name
+            
+        Returns:
+            Similarity score between 0.0 and 1.0
+        """
+        from difflib import SequenceMatcher
+        
+        # Normalize names for comparison
+        norm1 = self._normalize_company_name(name1)
+        norm2 = self._normalize_company_name(name2)
+        
+        if not norm1 or not norm2:
+            return 0.0
+        
+        # If normalized names are identical, return perfect match
+        if norm1 == norm2:
+            return 1.0
+        
+        # Calculate basic similarity
+        basic_similarity = SequenceMatcher(None, norm1, norm2).ratio()
+        
+        # Bonus for exact word matches
+        words1 = set(norm1.split())
+        words2 = set(norm2.split())
+        
+        if words1 and words2:
+            word_overlap = len(words1.intersection(words2)) / len(words1.union(words2))
+            # Weighted combination of character and word similarity
+            combined_similarity = (basic_similarity * 0.6) + (word_overlap * 0.4)
+        else:
+            combined_similarity = basic_similarity
+        
+        return min(combined_similarity, 1.0)
+    
+    def _normalize_company_name(self, name: str) -> str:
+        """
+        Normalize company name for comparison.
+        
+        Args:
+            name: Company name to normalize
+            
+        Returns:
+            Normalized company name
+        """
+        if not name:
+            return ""
+        
+        # Convert to lowercase
+        normalized = name.lower().strip()
+        
+        # Remove common company suffixes (but only if they're clearly suffixes)
+        suffixes = [
+            'inc', 'inc.', 'incorporated',
+            'llc', 'l.l.c.', 'limited liability company',
+            'ltd', 'ltd.', 'limited',
+            'corp', 'corp.', 'corporation',
+            'pbc', 'p.b.c.', 'public benefit corporation'
+        ]
+        
+        # Special handling for "company" and "co" - only remove if there are other words
+        words = normalized.split()
+        if len(words) > 1:
+            if words[-1] in ['company', 'co', 'co.']:
+                words = words[:-1]
+                normalized = ' '.join(words)
+        
+        # Sort suffixes by length (longest first) to avoid partial matches
+        suffixes.sort(key=len, reverse=True)
+        
+        for suffix in suffixes:
+            suffix_pattern = ' ' + suffix
+            if normalized.endswith(suffix_pattern):
+                normalized = normalized[:-len(suffix_pattern)].strip()
+                break  # Only remove one suffix
+        
+        # Remove punctuation and extra spaces
+        import string
+        normalized = ''.join(char if char not in string.punctuation else ' ' for char in normalized)
+        normalized = ' '.join(normalized.split())  # Normalize whitespace
+        
+        return normalized
+    
+    def save_discovery_results(self, discovery_companies: List[Any], 
+                             create_backup: bool = True) -> ProcessingResult:
+        """
+        Save discovery results to CSV with proper backup and validation.
+        
+        This method implements the complete workflow for saving discovery results:
+        1. Create backup of existing data
+        2. Load and merge with existing data
+        3. Perform deduplication
+        4. Validate merged data
+        5. Save to CSV
+        
+        Args:
+            discovery_companies: List of Company objects from discovery
+            create_backup: Whether to create backup before saving
+            
+        Returns:
+            ProcessingResult with operation details
+        """
+        start_time = datetime.now()
+        errors = []
+        
+        try:
+            logger.info(f"Saving {len(discovery_companies)} discovery results")
+            
+            # Step 1: Create backup if requested
+            if create_backup:
+                try:
+                    if os.path.exists(self.csv_file_path):
+                        backup_path = self.create_manual_backup("discovery")
+                        logger.info(f"Created backup: {backup_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to create backup: {e}")
+                    errors.append(f"Backup creation failed: {e}")
+            
+            # Step 2: Load existing data
+            existing_df = self.load_existing_data()
+            original_count = len(existing_df)
+            
+            # Step 3: Merge with discovery results
+            merged_df = self.merge_discovery_results(discovery_companies, existing_df)
+            
+            # Step 4: Validate merged data
+            cleaned_df, warnings = self.validate_and_clean_data(merged_df)
+            if warnings:
+                errors.extend([f"Data cleaning: {w}" for w in warnings])
+            
+            is_valid, validation_errors = self.validate_data_integrity(cleaned_df)
+            if not is_valid:
+                errors.extend([f"Validation: {e}" for e in validation_errors])
+                # Don't save if data is invalid
+                raise ValueError("Data validation failed")
+            
+            # Step 5: Save the merged data
+            self.save_data(cleaned_df)
+            
+            new_count = len(cleaned_df) - original_count
+            processing_time = (datetime.now() - start_time).total_seconds()
+            
+            result = ProcessingResult(
+                new_companies_count=max(0, new_count),
+                total_companies_count=len(cleaned_df),
+                errors=errors,
+                processing_time=processing_time,
+                success=True
+            )
+            
+            logger.info(f"Discovery results saved successfully: "
+                       f"{result.new_companies_count} new, "
+                       f"{result.total_companies_count} total companies")
+            
+            return result
+            
+        except Exception as e:
+            processing_time = (datetime.now() - start_time).total_seconds()
+            error_msg = f"Failed to save discovery results: {e}"
+            logger.error(error_msg)
+            errors.append(error_msg)
+            
+            return ProcessingResult(
+                new_companies_count=0,
+                total_companies_count=0,
+                errors=errors,
+                processing_time=processing_time,
+                success=False
+            )
+    
+    def deduplicate_discovery_results(self, discovery_companies: List[Any]) -> Tuple[List[Any], List[str]]:
+        """
+        Deduplicate discovery results before merging with existing data.
+        
+        This method removes duplicates within the discovery results themselves,
+        which is useful when multiple search queries return overlapping results.
+        
+        Args:
+            discovery_companies: List of Company objects from discovery
+            
+        Returns:
+            Tuple of (deduplicated_companies, list_of_warnings)
+        """
+        logger.info(f"Deduplicating {len(discovery_companies)} discovery results")
+        
+        if not discovery_companies:
+            return [], []
+        
+        warnings = []
+        
+        # Convert to DataFrame for easier processing
+        discovery_data = []
+        for company in discovery_companies:
+            if hasattr(company, 'to_dict'):
+                discovery_data.append(company.to_dict())
+            elif isinstance(company, dict):
+                discovery_data.append(company)
+            else:
+                warnings.append(f"Skipping invalid company object: {type(company)}")
+                continue
+        
+        if not discovery_data:
+            return [], warnings
+        
+        discovery_df = pd.DataFrame(discovery_data)
+        
+        # Deduplicate by LinkedIn URL first (exact matches)
+        linkedin_duplicates = discovery_df[
+            discovery_df.duplicated(subset=['linkedin_url'], keep='first') & 
+            (discovery_df['linkedin_url'] != '')
+        ]
+        
+        if not linkedin_duplicates.empty:
+            warnings.append(f"Removed {len(linkedin_duplicates)} LinkedIn URL duplicates")
+            discovery_df = discovery_df.drop(linkedin_duplicates.index)
+        
+        # Deduplicate by name similarity
+        similarity_duplicates = []
+        processed_indices = set()
+        
+        for i, row_i in discovery_df.iterrows():
+            if i in processed_indices:
+                continue
+                
+            name_i = row_i.get('name', '').strip().lower()
+            if not name_i:
+                continue
+            
+            for j, row_j in discovery_df.iterrows():
+                if j <= i or j in processed_indices:
+                    continue
+                    
+                name_j = row_j.get('name', '').strip().lower()
+                if not name_j:
+                    continue
+                
+                similarity = self._calculate_name_similarity(name_i, name_j)
+                if similarity >= 0.9:  # Very high threshold for discovery deduplication
+                    # Keep the one with more complete data
+                    completeness_i = self._calculate_record_completeness(row_i)
+                    completeness_j = self._calculate_record_completeness(row_j)
+                    
+                    if completeness_i >= completeness_j:
+                        similarity_duplicates.append(j)
+                    else:
+                        similarity_duplicates.append(i)
+                        break  # Don't process this record further
+                    
+                    processed_indices.add(j)
+        
+        if similarity_duplicates:
+            warnings.append(f"Removed {len(similarity_duplicates)} name similarity duplicates")
+            discovery_df = discovery_df.drop(similarity_duplicates)
+        
+        # Convert back to Company objects
+        from .models import Company
+        deduplicated_companies = []
+        
+        for _, row in discovery_df.iterrows():
+            try:
+                if hasattr(discovery_companies[0], '__class__') and discovery_companies[0].__class__.__name__ == 'Company':
+                    # Create Company object
+                    company = Company.from_dict(row.to_dict())
+                    deduplicated_companies.append(company)
+                else:
+                    # Keep as dictionary
+                    deduplicated_companies.append(row.to_dict())
+            except Exception as e:
+                warnings.append(f"Error creating deduplicated company: {e}")
+                continue
+        
+        logger.info(f"Deduplication complete: {len(deduplicated_companies)} unique companies")
+        return deduplicated_companies, warnings
+    
+    def _calculate_record_completeness(self, record: pd.Series) -> int:
+        """
+        Calculate completeness score for a company record.
+        
+        Args:
+            record: Company record as pandas Series
+            
+        Returns:
+            Completeness score (higher is more complete)
+        """
+        score = 0
+        
+        # Check important fields
+        important_fields = ['name', 'website', 'description', 'linkedin_url']
+        for field in important_fields:
+            value = record.get(field, '').strip()
+            if value:
+                score += 1
+                # Bonus for longer descriptions
+                if field == 'description' and len(value) > 50:
+                    score += 1
+        
+        return score
     
     def _is_valid_url_format(self, url: str) -> bool:
         """Check if URL has valid format."""

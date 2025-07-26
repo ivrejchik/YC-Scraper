@@ -1,5 +1,5 @@
 """
-Health Check and Monitoring Module for YC S25 Company Parser
+Health Check and Monitoring Module for YC Company Parser
 
 Provides health check endpoints and monitoring capabilities for the application.
 """

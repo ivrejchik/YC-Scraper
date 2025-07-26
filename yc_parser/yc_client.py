@@ -294,138 +294,16 @@ class YcClient:
 
     def fetch_s25_companies(self) -> List[Dict]:
         """
-        Fetch all S25 companies from YC API endpoint with comprehensive error handling.
+        Fetch all S25 companies from YC API endpoint (DEPRECATED).
+        
+        This method is deprecated. Use fetch_yc_batch_data() instead for any batch.
         
         Returns:
             List of company dictionaries with basic information
-            
-        Raises:
-            requests.RequestException: If API request fails
-            ValueError: If response format is invalid
         """
-        max_retries = 3
-        retry_delay = 2
-        
-        for attempt in range(max_retries):
-            try:
-                # Try the structured API endpoint first
-                api_url = f"{self.api_base}/summer-2025.json"
-                logger.info(f"Fetching S25 companies from API: {api_url} (attempt {attempt + 1}/{max_retries})")
-                
-                response = self.session.get(api_url, timeout=30)
-                response.raise_for_status()
-                
-                # Check if response is empty
-                if not response.content:
-                    raise ValueError("Empty response from API")
-                
-                # Parse JSON with error handling
-                try:
-                    data = response.json()
-                except ValueError as json_error:
-                    logger.error(f"Invalid JSON response: {json_error}")
-                    logger.debug(f"Response content: {response.content[:500]}")
-                    raise ValueError(f"Invalid JSON response: {json_error}")
-                
-                # Extract companies from response
-                if isinstance(data, list):
-                    companies = data
-                elif isinstance(data, dict) and 'companies' in data:
-                    companies = data['companies']
-                elif isinstance(data, dict) and 'data' in data:
-                    companies = data['data']
-                else:
-                    logger.warning(f"Unexpected API response format: {type(data)}")
-                    logger.debug(f"Response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
-                    raise ValueError("Unexpected API response format")
-                
-                if not companies:
-                    logger.warning("API returned empty companies list")
-                    if attempt < max_retries - 1:
-                        logger.info(f"Retrying in {retry_delay} seconds...")
-                        time.sleep(retry_delay)
-                        continue
-                    else:
-                        logger.error("API consistently returns empty data, falling back to scraping")
-                        return self._fallback_scrape_companies()
-                
-                logger.info(f"Successfully fetched {len(companies)} companies from API")
-                normalized_companies = self._normalize_api_data(companies)
-                
-                if not normalized_companies:
-                    logger.warning("No valid companies after normalization")
-                    if attempt < max_retries - 1:
-                        logger.info(f"Retrying in {retry_delay} seconds...")
-                        time.sleep(retry_delay)
-                        continue
-                
-                return normalized_companies
-                
-            except requests.exceptions.Timeout as e:
-                logger.warning(f"API request timeout (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    logger.info(f"Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2  # Exponential backoff
-                else:
-                    logger.error("API requests consistently timing out, falling back to scraping")
-                    return self._fallback_scrape_companies()
-                    
-            except requests.exceptions.ConnectionError as e:
-                logger.warning(f"API connection error (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    logger.info(f"Retrying in {retry_delay} seconds...")
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                else:
-                    logger.error("API connection consistently failing, falling back to scraping")
-                    return self._fallback_scrape_companies()
-                    
-            except requests.exceptions.HTTPError as e:
-                if e.response.status_code == 429:  # Rate limited
-                    retry_after = int(e.response.headers.get('Retry-After', retry_delay))
-                    logger.warning(f"API rate limited, waiting {retry_after} seconds")
-                    time.sleep(retry_after)
-                    if attempt < max_retries - 1:
-                        continue
-                elif e.response.status_code in [500, 502, 503, 504]:  # Server errors
-                    logger.warning(f"API server error {e.response.status_code} (attempt {attempt + 1})")
-                    if attempt < max_retries - 1:
-                        time.sleep(retry_delay)
-                        retry_delay *= 2
-                        continue
-                else:
-                    logger.error(f"API HTTP error {e.response.status_code}: {e}")
-                    return self._fallback_scrape_companies()
-                    
-            except requests.RequestException as e:
-                logger.error(f"API request failed (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                    retry_delay *= 2
-                else:
-                    logger.error("All API request attempts failed, falling back to scraping")
-                    return self._fallback_scrape_companies()
-                    
-            except (ValueError, KeyError) as e:
-                logger.error(f"Failed to parse API response (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                else:
-                    logger.error("API response parsing consistently failing, falling back to scraping")
-                    return self._fallback_scrape_companies()
-                    
-            except Exception as e:
-                logger.error(f"Unexpected error fetching from API (attempt {attempt + 1}): {e}")
-                if attempt < max_retries - 1:
-                    time.sleep(retry_delay)
-                else:
-                    logger.error("Unexpected errors in API requests, falling back to scraping")
-                    return self._fallback_scrape_companies()
-        
-        # If we get here, all retries failed
-        logger.error("All API fetch attempts failed, falling back to scraping")
-        return self._fallback_scrape_companies()
+        logger.warning("fetch_s25_companies() is deprecated. Use fetch_yc_batch_data() instead.")
+        return self.fetch_yc_batch_data("Summer", 2025)
+
     
     def _normalize_api_data(self, companies: List[Dict]) -> List[Dict]:
         """

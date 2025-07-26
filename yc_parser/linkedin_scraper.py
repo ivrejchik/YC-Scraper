@@ -1,7 +1,7 @@
 """
 LinkedIn Scraper Module
 
-Checks LinkedIn company pages for "YC S25" mentions.
+Checks LinkedIn company pages for YC batch mentions (e.g., "YC S25", "YC W24").
 """
 import time
 import random
@@ -162,7 +162,11 @@ class LinkedInScraper:
                         continue
                 
                 else:
-                    logger.warning(f"Unexpected HTTP {response.status_code} for {url}")
+                    # HTTP 999 is LinkedIn's anti-bot response, log as debug instead of warning
+                    if response.status_code == 999:
+                        logger.debug(f"LinkedIn anti-bot response (HTTP 999) for {url}")
+                    else:
+                        logger.warning(f"Unexpected HTTP {response.status_code} for {url}")
                     last_error = f"HTTP {response.status_code}"
                     if attempt < self.max_retries - 1:
                         time.sleep(retry_delay)
@@ -203,7 +207,10 @@ class LinkedInScraper:
                     time.sleep(retry_delay)
         
         # All attempts failed
-        logger.error(f"Failed to retrieve content from {url} after {self.max_retries} attempts. Last error: {last_error}")
+        if "HTTP 999" in str(last_error):
+            logger.debug(f"LinkedIn blocked access to {url} (anti-bot protection)")
+        else:
+            logger.warning(f"Failed to retrieve content from {url} after {self.max_retries} attempts. Last error: {last_error}")
         return None
     
     def check_yc_mention(self, linkedin_url: str) -> bool:

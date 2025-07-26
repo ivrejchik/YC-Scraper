@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Command Line Interface for YC S25 Company Parser
+Command Line Interface for YC Company Parser
 
 Provides command-line access to data collection and processing functionality
 outside of the Streamlit interface.
@@ -20,6 +20,7 @@ from .data_manager import DataManager
 from .config import load_config
 from .logging_config import setup_application_logging, get_logger
 from .health_check import run_health_check_cli
+from .linkedin_discovery import LinkedInDiscoveryService
 
 
 def setup_cli_logging(config: Dict[str, Any], verbose: bool = False) -> None:
@@ -45,10 +46,31 @@ def process_companies(args) -> int:
     setup_cli_logging(config, args.verbose)
     logger = get_logger(__name__)
     
-    logger.info("Starting CLI company processing")
+    # Get batch parameters
+    if hasattr(args, 'batch') and args.batch:
+        from .config import parse_batch_code, format_config_paths
+        try:
+            season, year = parse_batch_code(args.batch)
+            batch_code = args.batch.upper()
+            config = format_config_paths(config, batch_code)
+        except ValueError as e:
+            print(f"❌ Invalid batch code '{args.batch}': {e}")
+            return 1
+    else:
+        # Use default batch from config
+        season = config.get('batch', {}).get('default_season', 'Summer')
+        year = config.get('batch', {}).get('default_year', 2025)
+        batch_code = config.get('batch', {}).get('default_batch_code', 'S25')
+        config = format_config_paths(config, batch_code)
+    
+    logger.info(f"Starting CLI company processing for {season} {year} ({batch_code})")
     
     try:
-        processor = CompanyProcessor()
+        processor = CompanyProcessor(
+            csv_file_path=config['data']['csv_file_path'],
+            season=season,
+            year=year
+        )
         
         # Show processing configuration if verbose
         if args.verbose:
@@ -122,10 +144,31 @@ def validate_data(args) -> int:
     setup_cli_logging(config, args.verbose)
     logger = get_logger(__name__)
     
-    logger.info("Starting CLI data validation")
+    # Get batch parameters
+    if hasattr(args, 'batch') and args.batch:
+        from .config import parse_batch_code, format_config_paths
+        try:
+            season, year = parse_batch_code(args.batch)
+            batch_code = args.batch.upper()
+            config = format_config_paths(config, batch_code)
+        except ValueError as e:
+            print(f"❌ Invalid batch code '{args.batch}': {e}")
+            return 1
+    else:
+        # Use default batch from config
+        season = config.get('batch', {}).get('default_season', 'Summer')
+        year = config.get('batch', {}).get('default_year', 2025)
+        batch_code = config.get('batch', {}).get('default_batch_code', 'S25')
+        config = format_config_paths(config, batch_code)
+    
+    logger.info(f"Starting CLI data validation for {season} {year} ({batch_code})")
     
     try:
-        processor = CompanyProcessor()
+        processor = CompanyProcessor(
+            csv_file_path=config['data']['csv_file_path'],
+            season=season,
+            year=year
+        )
         
         print("🔍 Validating data integrity...")
         result = processor.validate_data_integrity()
@@ -187,9 +230,30 @@ def show_stats(args) -> int:
     setup_cli_logging(config, args.verbose)
     logger = get_logger(__name__)
     
+    # Get batch parameters
+    if hasattr(args, 'batch') and args.batch:
+        from .config import parse_batch_code, format_config_paths
+        try:
+            season, year = parse_batch_code(args.batch)
+            batch_code = args.batch.upper()
+            config = format_config_paths(config, batch_code)
+        except ValueError as e:
+            print(f"❌ Invalid batch code '{args.batch}': {e}")
+            return 1
+    else:
+        # Use default batch from config
+        season = config.get('batch', {}).get('default_season', 'Summer')
+        year = config.get('batch', {}).get('default_year', 2025)
+        batch_code = config.get('batch', {}).get('default_batch_code', 'S25')
+        config = format_config_paths(config, batch_code)
+    
     try:
-        data_manager = DataManager()
-        processor = CompanyProcessor()
+        data_manager = DataManager(config['data']['csv_file_path'])
+        processor = CompanyProcessor(
+            csv_file_path=config['data']['csv_file_path'],
+            season=season,
+            year=year
+        )
         
         # Load data
         df = data_manager.load_existing_data()
@@ -208,10 +272,11 @@ def show_stats(args) -> int:
         linkedin_percentage = (companies_with_linkedin / len(df) * 100) if len(df) > 0 else 0
         print(f"Companies with LinkedIn: {companies_with_linkedin} ({linkedin_percentage:.1f}%)")
         
-        # YC S25 mentions
-        yc_mentions = len(df[df['yc_s25_on_linkedin'] == True])
+        # YC batch mentions (use dynamic field name)
+        yc_field = 'yc_batch_on_linkedin' if 'yc_batch_on_linkedin' in df.columns else 'yc_s25_on_linkedin'
+        yc_mentions = len(df[df[yc_field] == True]) if yc_field in df.columns else 0
         mention_percentage = (yc_mentions / len(df) * 100) if len(df) > 0 else 0
-        print(f"YC S25 LinkedIn mentions: {yc_mentions} ({mention_percentage:.1f}%)")
+        print(f"YC {batch_code} LinkedIn mentions: {yc_mentions} ({mention_percentage:.1f}%)")
         
         # Website statistics
         companies_with_websites = len(df[(df['website'] != '') & (df['website'].notna())])
@@ -266,8 +331,29 @@ def backup_data(args) -> int:
     setup_cli_logging(config, args.verbose)
     logger = get_logger(__name__)
     
+    # Get batch parameters
+    if hasattr(args, 'batch') and args.batch:
+        from .config import parse_batch_code, format_config_paths
+        try:
+            season, year = parse_batch_code(args.batch)
+            batch_code = args.batch.upper()
+            config = format_config_paths(config, batch_code)
+        except ValueError as e:
+            print(f"❌ Invalid batch code '{args.batch}': {e}")
+            return 1
+    else:
+        # Use default batch from config
+        season = config.get('batch', {}).get('default_season', 'Summer')
+        year = config.get('batch', {}).get('default_year', 2025)
+        batch_code = config.get('batch', {}).get('default_batch_code', 'S25')
+        config = format_config_paths(config, batch_code)
+    
     try:
-        processor = CompanyProcessor()
+        processor = CompanyProcessor(
+            csv_file_path=config['data']['csv_file_path'],
+            season=season,
+            year=year
+        )
         
         # Generate backup name
         if args.name:
@@ -298,8 +384,29 @@ def clear_resume(args) -> int:
     setup_cli_logging(config, args.verbose)
     logger = get_logger(__name__)
     
+    # Get batch parameters
+    if hasattr(args, 'batch') and args.batch:
+        from .config import parse_batch_code, format_config_paths
+        try:
+            season, year = parse_batch_code(args.batch)
+            batch_code = args.batch.upper()
+            config = format_config_paths(config, batch_code)
+        except ValueError as e:
+            print(f"❌ Invalid batch code '{args.batch}': {e}")
+            return 1
+    else:
+        # Use default batch from config
+        season = config.get('batch', {}).get('default_season', 'Summer')
+        year = config.get('batch', {}).get('default_year', 2025)
+        batch_code = config.get('batch', {}).get('default_batch_code', 'S25')
+        config = format_config_paths(config, batch_code)
+    
     try:
-        processor = CompanyProcessor()
+        processor = CompanyProcessor(
+            csv_file_path=config['data']['csv_file_path'],
+            season=season,
+            year=year
+        )
         
         resume_status = processor.get_resume_status()
         if not resume_status.get('has_resume_data'):
@@ -316,6 +423,113 @@ def clear_resume(args) -> int:
     except Exception as e:
         print(f"❌ Failed to clear resume data: {e}")
         logger.error(f"CLI clear resume failed: {e}")
+        return 1
+
+
+def discover_linkedin(args) -> int:
+    """Discover LinkedIn profiles for YC companies and merge with existing data."""
+    config = load_config()
+    setup_cli_logging(config, args.verbose)
+    logger = get_logger(__name__)
+    
+    logger.info(f"Starting CLI LinkedIn discovery for batch {args.batch}")
+    
+    try:
+        # Override configuration with command-line options if provided
+        if hasattr(args, 'search_delay') and args.search_delay:
+            config['linkedin_discovery']['search_delay_min'] = args.search_delay
+            config['linkedin_discovery']['search_delay_max'] = args.search_delay + 1.0
+        
+        if hasattr(args, 'max_results') and args.max_results:
+            config['linkedin_discovery']['max_results_per_search'] = args.max_results
+        
+        # Show discovery configuration if verbose
+        if args.verbose:
+            print(f"Configuration loaded from: {config.get('_config_path', 'default')}")
+            print(f"Batch: {args.batch}")
+            print(f"Search delay: {config.get('linkedin_discovery', {}).get('search_delay_min', 2.0)}-{config.get('linkedin_discovery', {}).get('search_delay_max', 4.0)}s")
+            print(f"Max results per search: {config.get('linkedin_discovery', {}).get('max_results_per_search', 10)}")
+            print(f"Dry run: {args.dry_run}")
+            print()
+        
+        # Initialize discovery service
+        discovery_service = LinkedInDiscoveryService(config)
+        
+        # Show progress header
+        print(f"🔍 Discovering LinkedIn profiles for YC {args.batch}...")
+        print("=" * 60)
+        
+        # Track progress with real-time updates
+        start_time = time.time()
+        
+        # Perform discovery
+        result = discovery_service.discover_and_merge(args.batch)
+        
+        processing_time = time.time() - start_time
+        
+        # Display results
+        if result.get('success'):
+            print(f"\n✅ LinkedIn discovery completed successfully!")
+            print(f"   Batch processed: YC {result['batch']}")
+            print(f"   YC companies found: {result['yc_companies_count']}")
+            print(f"   LinkedIn profiles discovered: {result['linkedin_results_count']}")
+            print(f"   Total merged companies: {result['merged_companies_count']}")
+            print(f"   Processing time: {processing_time:.1f} seconds")
+            
+            if not args.dry_run:
+                # Save results to CSV
+                data_manager = DataManager()
+                
+                # Create backup before saving
+                backup_name = f"pre_discovery_{args.batch}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                try:
+                    backup_path = data_manager.create_backup(backup_name)
+                    print(f"   Backup created: {backup_path}")
+                except Exception as e:
+                    print(f"   ⚠️  Backup creation failed: {e}")
+                
+                # Save merged data
+                try:
+                    companies = result['companies']
+                    save_result = data_manager.append_companies(companies)
+                    
+                    if save_result.get('success'):
+                        print(f"   ✅ Data saved successfully!")
+                        print(f"   New companies added: {save_result.get('new_companies_count', 0)}")
+                        print(f"   Total companies in dataset: {save_result.get('total_companies_count', 0)}")
+                    else:
+                        print(f"   ❌ Failed to save data: {save_result.get('error', 'Unknown error')}")
+                        return 1
+                        
+                except Exception as e:
+                    print(f"   ❌ Error saving data: {e}")
+                    logger.error(f"CLI discovery data save failed: {e}")
+                    return 1
+            else:
+                print(f"   🔍 Dry run completed - no data was saved")
+            
+            logger.info(f"CLI LinkedIn discovery completed successfully: {result['merged_companies_count']} companies")
+            return 0
+            
+        else:
+            print(f"❌ LinkedIn discovery failed!")
+            error_msg = result.get('error', 'Unknown error')
+            failed_step = result.get('step_name', 'unknown step')
+            print(f"   Error: {error_msg}")
+            print(f"   Failed at: {failed_step}")
+            print(f"   Processing time: {processing_time:.1f} seconds")
+            
+            logger.error(f"CLI LinkedIn discovery failed: {error_msg}")
+            return 1
+            
+    except KeyboardInterrupt:
+        print("\n⚠️  Discovery interrupted by user")
+        logger.warning("CLI LinkedIn discovery interrupted by user")
+        return 130  # Standard exit code for SIGINT
+        
+    except Exception as e:
+        print(f"❌ Unexpected error during discovery: {e}")
+        logger.error(f"CLI LinkedIn discovery failed with unexpected error: {e}")
         return 1
 
 
@@ -402,6 +616,8 @@ Examples:
   %(prog)s validate --repair          # Validate and repair data
   %(prog)s stats                      # Show dataset statistics
   %(prog)s backup --name my_backup    # Create named backup
+  %(prog)s discover --batch S25       # Discover LinkedIn profiles for YC S25
+  %(prog)s discover --dry-run         # Test discovery without saving
   %(prog)s health                     # Run health checks
         """
     )
@@ -423,6 +639,11 @@ Examples:
     # Process command
     process_parser = subparsers.add_parser('process', help='Process new companies')
     process_parser.add_argument(
+        '--batch', '-b',
+        type=str,
+        help='YC batch to process (e.g., S25, W25, S24, W24). Defaults to config default.'
+    )
+    process_parser.add_argument(
         '--force', '-f',
         action='store_true',
         help='Force processing without prompting for resume'
@@ -432,6 +653,11 @@ Examples:
     # Validate command
     validate_parser = subparsers.add_parser('validate', help='Validate data integrity')
     validate_parser.add_argument(
+        '--batch', '-b',
+        type=str,
+        help='YC batch to validate (e.g., S25, W25, S24, W24). Defaults to config default.'
+    )
+    validate_parser.add_argument(
         '--repair', '-r',
         action='store_true',
         help='Attempt to repair data issues automatically'
@@ -440,10 +666,20 @@ Examples:
     
     # Stats command
     stats_parser = subparsers.add_parser('stats', help='Show dataset statistics')
+    stats_parser.add_argument(
+        '--batch', '-b',
+        type=str,
+        help='YC batch to show stats for (e.g., S25, W25, S24, W24). Defaults to config default.'
+    )
     stats_parser.set_defaults(func=show_stats)
     
     # Backup command
     backup_parser = subparsers.add_parser('backup', help='Create data backup')
+    backup_parser.add_argument(
+        '--batch', '-b',
+        type=str,
+        help='YC batch to backup (e.g., S25, W25, S24, W24). Defaults to config default.'
+    )
     backup_parser.add_argument(
         '--name', '-n',
         type=str,
@@ -453,7 +689,37 @@ Examples:
     
     # Clear resume command
     clear_parser = subparsers.add_parser('clear-resume', help='Clear resume data')
+    clear_parser.add_argument(
+        '--batch', '-b',
+        type=str,
+        help='YC batch to clear resume data for (e.g., S25, W25, S24, W24). Defaults to config default.'
+    )
     clear_parser.set_defaults(func=clear_resume)
+    
+    # Discovery command
+    discovery_parser = subparsers.add_parser('discover', help='Discover LinkedIn profiles for YC companies')
+    discovery_parser.add_argument(
+        '--batch', '-b',
+        type=str,
+        default='S25',
+        help='YC batch to process (e.g., S25, W25, S24, W24)'
+    )
+    discovery_parser.add_argument(
+        '--dry-run', '-d',
+        action='store_true',
+        help='Perform discovery without saving results'
+    )
+    discovery_parser.add_argument(
+        '--search-delay',
+        type=float,
+        help='Override search delay between requests (seconds)'
+    )
+    discovery_parser.add_argument(
+        '--max-results',
+        type=int,
+        help='Override maximum results per search query'
+    )
+    discovery_parser.set_defaults(func=discover_linkedin)
     
     # Health check command
     health_parser = subparsers.add_parser('health', help='Run health checks')

@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .yc_client import YcClient
 from .linkedin_scraper import LinkedInScraper
+from .linkedin_discovery import LinkedInDiscoveryService
 from .data_manager import DataManager
 from .models import ProcessingResult, create_empty_processing_result
 
@@ -24,7 +25,7 @@ class CompanyProcessor:
     to provide incremental processing that only handles new companies.
     """
     
-    def __init__(self, csv_file_path: str = "yc_s25_companies.csv", 
+    def __init__(self, csv_file_path: str = None, 
                  max_workers: int = 3, batch_size: int = 10, 
                  linkedin_delay_range: tuple = (1, 2),
                  season: str = "Summer", year: int = 2025):
@@ -32,13 +33,22 @@ class CompanyProcessor:
         Initialize the CompanyProcessor with configurable optimization parameters.
         
         Args:
-            csv_file_path: Path to CSV file for data persistence
+            csv_file_path: Path to CSV file for data persistence (auto-generated if None)
             max_workers: Maximum number of concurrent workers for LinkedIn processing
             batch_size: Number of companies to process in each batch
             linkedin_delay_range: Tuple of (min, max) seconds for LinkedIn rate limiting
             season: YC batch season ("Summer" or "Winter")
             year: YC batch year (e.g., 2025, 2024, etc.)
         """
+        # Generate batch code for file paths
+        season_code = "S" if season.lower() == "summer" else "W"
+        year_short = str(year)[-2:]  # Get last 2 digits of year
+        batch_code = f"{season_code}{year_short}"
+        
+        # Auto-generate CSV file path if not provided
+        if csv_file_path is None:
+            csv_file_path = f"yc_{batch_code.lower()}_companies.csv"
+        
         self.data_manager = DataManager(csv_file_path)
         self.yc_client = YcClient(season=season, year=year)
         
@@ -48,6 +58,21 @@ class CompanyProcessor:
         batch_code = f"{season_code}{year_short}"
         
         self.linkedin_scraper = LinkedInScraper(delay_range=linkedin_delay_range, batch_code=batch_code)
+        
+        # Initialize LinkedIn discovery service
+        discovery_config = {
+            'linkedin_discovery': {
+                'max_results_per_search': 10,
+                'search_delay_min': linkedin_delay_range[0],
+                'search_delay_max': linkedin_delay_range[1],
+                'max_retries': 2
+            },
+            'company_matching': {
+                'min_confidence_threshold': 0.6,
+                'high_confidence_threshold': 0.8
+            }
+        }
+        self.linkedin_discovery = LinkedInDiscoveryService(discovery_config)
         
         # Batch parameters
         self.season = season
@@ -63,16 +88,20 @@ class CompanyProcessor:
         self.resume_state_file = csv_file_path.replace('.csv', '_resume_state.json')
         self._processing_interrupted = False
         
-    def process_new_companies(self) -> ProcessingResult:
+    def process_new_companies(self, enable_linkedin_discovery: bool = True) -> ProcessingResult:
         """
         Main processing pipeline that identifies and processes only new companies.
         
         This method:
-        1. Fetches current S25 companies from YC API
+        1. Fetches current companies from YC API
         2. Loads existing processed data
         3. Identifies new companies not in existing dataset
         4. Enriches new companies with LinkedIn data
-        5. Merges with existing data and saves
+        5. Optionally discovers LinkedIn-only companies
+        6. Merges with existing data and saves
+        
+        Args:
+            enable_linkedin_discovery: Whether to discover LinkedIn-only companies
         
         Returns:
             ProcessingResult with statistics and error reporting
@@ -81,10 +110,11 @@ class CompanyProcessor:
         result = create_empty_processing_result()
         
         try:
-            logger.info("Starting company processing pipeline")
+            logger.info("Starting comprehensive company processing pipeline")
+            logger.info(f"LinkedIn discovery enabled: {enable_linkedin_discovery}")
             
             # Step 1: Fetch YC data
-            logger.info("Fetching YC S25 company data")
+            logger.info("Fetching YC company data")
             yc_companies = self._fetch_yc_data()
             
             if not yc_companies:
@@ -105,29 +135,93 @@ class CompanyProcessor:
             new_companies = self._filter_new_companies(yc_companies, existing_data)
             result.new_companies_count = len(new_companies)
             
-            if not new_companies:
+            # Step 4: Enrich with LinkedIn data (even if no new YC companies)
+            logger.info("Enriching companies with LinkedIn data")
+            enriched_companies = []
+            linkedin_errors = []
+            
+            if new_companies:
+                logger.info(f"Found {len(new_companies)} new YC companies to process")
+                enriched_companies, linkedin_errors = self._enrich_linkedin_data(new_companies)
+                result.errors.extend(linkedin_errors)
+            else:
+                logger.info("No new YC companies found")
+            
+            # Step 5: LinkedIn Discovery (find LinkedIn-only companies)
+            linkedin_only_companies = []
+            if enable_linkedin_discovery:
+                logger.info("Starting LinkedIn discovery for additional companies")
+                try:
+                    discovery_result = self.linkedin_discovery.discover_and_merge(self.batch_code)
+                    
+                    if discovery_result['success']:
+                        # Extract LinkedIn-only companies (those not in YC API)
+                        discovered_companies = discovery_result['companies']
+                        
+                        # Filter to get only LinkedIn-only companies
+                        yc_company_names = {c.get('name', '').lower().strip() for c in yc_companies}
+                        
+                        for company in discovered_companies:
+                            # Handle both Company objects and dictionaries
+                            if hasattr(company, 'to_dict'):
+                                company_dict = company.to_dict()
+                            elif isinstance(company, dict):
+                                company_dict = company
+                            else:
+                                continue
+                            
+                            company_name = company_dict.get('name', '').lower().strip()
+                            
+                            # Only include if not in YC API data
+                            if company_name and company_name not in yc_company_names:
+                                # Mark as LinkedIn-only and with YC mention (since found via YC search)
+                                company_dict['linkedin_only'] = True
+                                company_dict['yc_page'] = ''  # No YC page for LinkedIn-only companies
+                                company_dict['yc_batch_on_linkedin'] = True  # Found via YC search = has mention
+                                company_dict['yc_batch_on_linkedin'] = True  # Backward compatibility
+                                linkedin_only_companies.append(company_dict)
+                        
+                        logger.info(f"LinkedIn discovery found {len(linkedin_only_companies)} LinkedIn-only companies")
+                        result.errors.extend([f"LinkedIn discovery: {discovery_result.get('processing_time_seconds', 0):.1f}s"])
+                    else:
+                        error_msg = f"LinkedIn discovery failed: {discovery_result.get('error', 'Unknown error')}"
+                        logger.warning(error_msg)
+                        result.errors.append(error_msg)
+                        
+                except Exception as e:
+                    error_msg = f"LinkedIn discovery error: {e}"
+                    logger.error(error_msg)
+                    result.errors.append(error_msg)
+            
+            # Step 6: Combine all companies
+            all_new_companies = enriched_companies + linkedin_only_companies
+            total_new_count = len(all_new_companies)
+            
+            if total_new_count == 0:
                 logger.info("No new companies found to process")
                 result.success = True
                 result.processing_time = (datetime.now() - start_time).total_seconds()
                 return result
             
-            logger.info(f"Found {len(new_companies)} new companies to process")
+            logger.info(f"Total new companies to add: {total_new_count} (YC: {len(enriched_companies)}, LinkedIn-only: {len(linkedin_only_companies)})")
             
-            # Step 4: Enrich with LinkedIn data
-            logger.info("Enriching new companies with LinkedIn data")
-            enriched_companies, linkedin_errors = self._enrich_linkedin_data(new_companies)
-            result.errors.extend(linkedin_errors)
+            # Step 7: Normalize field names for compatibility
+            logger.info("Normalizing field names for data consistency")
+            all_new_companies = self._normalize_linkedin_fields(all_new_companies)
             
-            # Step 5: Merge and save data
+            # Step 8: Merge and save data
             logger.info("Merging and saving updated data")
-            merged_data = self.data_manager.merge_and_deduplicate(enriched_companies, existing_data)
+            merged_data = self.data_manager.merge_and_deduplicate(all_new_companies, existing_data)
             self.data_manager.save_data(merged_data)
             
+            result.new_companies_count = total_new_count
             result.total_companies_count = len(merged_data)
             result.success = True
             
             logger.info(f"Processing completed successfully:")
-            logger.info(f"  - New companies processed: {result.new_companies_count}")
+            logger.info(f"  - New YC companies processed: {len(enriched_companies)}")
+            logger.info(f"  - New LinkedIn-only companies: {len(linkedin_only_companies)}")
+            logger.info(f"  - Total new companies: {result.new_companies_count}")
             logger.info(f"  - Total companies in dataset: {result.total_companies_count}")
             logger.info(f"  - Errors encountered: {len(result.errors)}")
             
@@ -196,7 +290,7 @@ class CompanyProcessor:
     
     def _enrich_linkedin_data(self, companies: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[str]]:
         """
-        Enrich company data with LinkedIn YC S25 mention flags using optimized batch processing.
+        Enrich company data with LinkedIn YC batch mention flags using optimized batch processing.
         
         Args:
             companies: List of company dictionaries to enrich
@@ -681,6 +775,31 @@ class CompanyProcessor:
         self._clear_resume_state()
         logger.info("Resume data cleared manually")
     
+    def _normalize_linkedin_fields(self, companies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Normalize LinkedIn field names for backward compatibility.
+        
+        Args:
+            companies: List of company dictionaries
+            
+        Returns:
+            List of companies with normalized field names
+        """
+        for company in companies:
+            # Handle backward compatibility for LinkedIn field names
+            if 'yc_batch_on_linkedin' in company and 'yc_s25_on_linkedin' not in company:
+                # New field exists, create alias for old field name for compatibility
+                company['yc_s25_on_linkedin'] = company['yc_batch_on_linkedin']
+            elif 'yc_s25_on_linkedin' in company and 'yc_batch_on_linkedin' not in company:
+                # Old field exists, create new field name
+                company['yc_batch_on_linkedin'] = company['yc_s25_on_linkedin']
+            elif 'yc_batch_on_linkedin' not in company and 'yc_s25_on_linkedin' not in company:
+                # Neither field exists, create both with default values
+                company['yc_s25_on_linkedin'] = False
+                company['yc_batch_on_linkedin'] = False
+        
+        return companies
+
     def close(self):
         """Clean up resources."""
         try:

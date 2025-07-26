@@ -1,0 +1,147 @@
+# YC Company Parser Configuration
+# Copy this file to config.yaml and customize as needed
+
+# Application settings
+app:
+  name: "YC Company Parser"
+  version: "1.0.0"
+  environment: "production"  # or "development"
+  debug: false
+
+# Batch configuration
+batch:
+  default_season: "Summer"    # "Summer" or "Winter"
+  default_year: 2025          # Year (e.g., 2025, 2024, etc.)
+  default_batch_code: "S25"   # Auto-generated from season/year if not specified
+
+# Data storage settings
+data:
+  csv_file_path: "yc_{batch}_companies.csv"  # {batch} will be replaced with batch code
+  backup_directory: "data_backups"
+  backup_retention_days: 30
+  auto_backup: true
+  backup_on_startup: true
+
+# Processing settings
+processing:
+  max_workers: 3
+  batch_size: 10
+  enable_resume: true
+  resume_state_file: "yc_{batch}_companies_resume_state.json"  # {batch} will be replaced
+  validate_on_startup: true
+  auto_repair_data: false
+
+# Rate limiting settings
+rate_limiting:
+  linkedin_delay_min: 1.0
+  linkedin_delay_max: 2.0
+  request_timeout: 30
+  connect_timeout: 10
+  max_retries: 3
+  retry_delay: 1.0
+  backoff_factor: 2.0
+
+# YC API settings
+yc_api:
+  base_url: "https://www.ycombinator.com"
+  api_base: "https://yc-oss.github.io/api/batches"
+  api_endpoint_template: "{season_lower}-{year}.json"  # e.g., "summer-2025.json"
+  user_agent: "YC Company Parser/1.0"
+  headers:
+    Accept: "application/json"
+    Accept-Language: "en-US,en;q=0.9"
+
+# LinkedIn settings
+linkedin:
+  user_agents:
+    - "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    - "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  headers:
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8"
+    Accept-Language: "en-US,en;q=0.5"
+    Accept-Encoding: "gzip, deflate, br"
+    DNT: "1"
+    Connection: "keep-alive"
+    Upgrade-Insecure-Requests: "1"
+
+# LinkedIn discovery settings
+linkedin_discovery:
+  default_batch: "S25"
+  search_query_template: "site:linkedin.com {company_name} YC {batch}"
+  max_results_per_search: 10
+  confidence_threshold: 0.7
+  enable_fuzzy_matching: true
+  fuzzy_match_threshold: 0.8
+  search_delay_min: 2.0
+  search_delay_max: 4.0
+  max_retries: 3
+  retry_delay: 5.0
+  normalize_company_names: true
+  skip_existing_linkedin_urls: true
+
+# Logging settings
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  log_directory: "logs"
+  log_file: "yc_parser.log"
+  error_log_file: "yc_parser_errors.log"
+  max_log_size_mb: 10
+  backup_count: 5
+  console_logging: true
+  console_level: "INFO"
+
+# Streamlit settings
+streamlit:
+  page_title: "YC Company Parser"
+  page_icon: "🚀"
+  layout: "wide"
+  show_error_recovery: true
+  show_system_status: true
+  auto_refresh_interval: 0
+  max_description_length: 100
+  show_clickable_links: true
+
+# Health check settings
+health_check:
+  enabled: true
+  port: 8080
+  endpoint: "/health"
+  check_interval: 60
+  timeout: 10
+  checks:
+    - "data_file_exists"
+    - "csv_readable"
+    - "log_directory_writable"
+    - "network_connectivity"
+  auto_start_server: false
+
+# Monitoring settings
+monitoring:
+  enabled: false
+  collect_metrics: false
+  metrics_file: "metrics.json"
+  track_processing_time: true
+  track_memory_usage: false
+  track_network_requests: true
+  alerts_enabled: false
+  error_threshold: 5
+  processing_time_threshold: 300
+
+# Security settings
+security:
+  verify_ssl: true
+  allow_redirects: true
+  max_redirects: 5
+  sanitize_logs: true
+  mask_sensitive_data: true
+
+# Development settings
+development:
+  use_mock_data: false
+  mock_company_count: 10
+  verbose_logging: true
+  save_raw_responses: false
+  skip_linkedin_checks: false
+  fast_mode: false

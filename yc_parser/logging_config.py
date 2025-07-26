@@ -1,5 +1,5 @@
 """
-Centralized logging configuration for the YC S25 Company Parser.
+Centralized logging configuration for the YC Company Parser.
 
 This module provides structured logging setup with different levels,
 formatters, and handlers for comprehensive error tracking and debugging.

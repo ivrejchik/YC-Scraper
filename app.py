@@ -1,7 +1,7 @@
 """
-Streamlit App for YC S25 Company Parser
+Streamlit App for YC Company Parser
 
-Provides the web interface for viewing and refreshing company data.
+Provides the web interface for viewing and refreshing company data across different YC batches.
 """
 
 import streamlit as st
@@ -476,11 +476,27 @@ def apply_filters_and_sorting(df: pd.DataFrame, search_term: str, linkedin_filte
         filtered_df = filtered_df[(filtered_df['linkedin_url'] != '') & (filtered_df['linkedin_url'].notna())]
     elif linkedin_filter == "No LinkedIn":
         filtered_df = filtered_df[(filtered_df['linkedin_url'] == '') | (filtered_df['linkedin_url'].isna())]
+    elif linkedin_filter == "LinkedIn-only Companies":
+        # Show only companies discovered from LinkedIn (not in YC API)
+        if 'linkedin_only' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['linkedin_only'] == True]
+        else:
+            # If no linkedin_only column, return empty (no LinkedIn-only companies)
+            filtered_df = filtered_df.iloc[0:0]
+    elif linkedin_filter == "YC API Companies":
+        # Show only companies from YC API (not LinkedIn-only)
+        if 'linkedin_only' in filtered_df.columns:
+            filtered_df = filtered_df[filtered_df['linkedin_only'] == False]
+        else:
+            # If no linkedin_only column, all companies are from YC API
+            pass
     elif "YC" in linkedin_filter and "Mention" in linkedin_filter:
         # Use the normalized field that should exist in the dataframe
-        filtered_df = filtered_df[filtered_df['yc_s25_on_linkedin'] == True]
+        yc_field = 'yc_batch_on_linkedin' if 'yc_batch_on_linkedin' in filtered_df.columns else 'yc_s25_on_linkedin'
+        filtered_df = filtered_df[filtered_df[yc_field] == True]
     elif linkedin_filter == "No YC Mention":
-        filtered_df = filtered_df[filtered_df['yc_s25_on_linkedin'] == False]
+        yc_field = 'yc_batch_on_linkedin' if 'yc_batch_on_linkedin' in filtered_df.columns else 'yc_s25_on_linkedin'
+        filtered_df = filtered_df[filtered_df[yc_field] == False]
     
     # Apply sorting
     if sort_by == "Name (A-Z)":
@@ -488,7 +504,8 @@ def apply_filters_and_sorting(df: pd.DataFrame, search_term: str, linkedin_filte
     elif sort_by == "Name (Z-A)":
         filtered_df = filtered_df.sort_values('name', ascending=False)
     elif sort_by == "YC Mentions First":
-        filtered_df = filtered_df.sort_values(['yc_s25_on_linkedin', 'name'], ascending=[False, True])
+        yc_field = 'yc_batch_on_linkedin' if 'yc_batch_on_linkedin' in filtered_df.columns else 'yc_s25_on_linkedin'
+        filtered_df = filtered_df.sort_values([yc_field, 'name'], ascending=[False, True])
     elif sort_by == "LinkedIn First":
         # Sort by whether they have LinkedIn URL, then by name
         filtered_df['has_linkedin'] = (filtered_df['linkedin_url'] != '') & (filtered_df['linkedin_url'].notna())
@@ -515,8 +532,16 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
     # Get current batch for display
     current_batch = _detect_current_batch()
     
+    # Add visual indicators for LinkedIn-only companies
+    if 'linkedin_only' in display_df.columns:
+        display_df['name'] = display_df.apply(
+            lambda row: f"🔗 {row['name']}" if row.get('linkedin_only', False) else row['name'], 
+            axis=1
+        )
+    
     # Format YC batch LinkedIn flag as Yes/No (use normalized field)
-    display_df['yc_s25_on_linkedin'] = display_df['yc_s25_on_linkedin'].map({
+    yc_field = 'yc_batch_on_linkedin' if 'yc_batch_on_linkedin' in display_df.columns else 'yc_s25_on_linkedin'
+    display_df[yc_field] = display_df[yc_field].map({
         True: "Yes", 
         False: "No"
     })
@@ -540,7 +565,7 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
     )
     
     # Reorder columns for better display
-    column_order = ['name', 'website', 'description', 'yc_page', 'linkedin_url', 'yc_s25_on_linkedin']
+    column_order = ['name', 'website', 'description', 'yc_page', 'linkedin_url', yc_field]
     display_df = display_df.reindex(columns=column_order)
     
     # Rename columns for better readability
@@ -655,7 +680,7 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
     st.markdown("---")
     st.subheader("📊 Dataset Statistics")
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     
     with col1:
         st.metric("Total Companies", len(df))
@@ -666,12 +691,22 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
         st.metric("With LinkedIn", companies_with_linkedin, f"{linkedin_percentage:.1f}%")
     
     with col3:
-        yc_mentions = len(df[df['yc_s25_on_linkedin'] == True])
+        yc_field = 'yc_batch_on_linkedin' if 'yc_batch_on_linkedin' in df.columns else 'yc_s25_on_linkedin'
+        yc_mentions = len(df[df[yc_field] == True])
         mention_percentage = (yc_mentions / len(df) * 100) if len(df) > 0 else 0
         current_batch = _detect_current_batch()
         st.metric(f"YC {current_batch} Mentions", yc_mentions, f"{mention_percentage:.1f}%")
     
     with col4:
+        # LinkedIn-only companies
+        if 'linkedin_only' in df.columns:
+            linkedin_only_count = len(df[df['linkedin_only'] == True])
+        else:
+            linkedin_only_count = 0
+        linkedin_only_percentage = (linkedin_only_count / len(df) * 100) if len(df) > 0 else 0
+        st.metric("LinkedIn-only", linkedin_only_count, f"{linkedin_only_percentage:.1f}%")
+    
+    with col5:
         companies_with_websites = len(df[(df['website'] != '') & (df['website'].notna())])
         website_percentage = (companies_with_websites / len(df) * 100) if len(df) > 0 else 0
         st.metric("With Websites", companies_with_websites, f"{website_percentage:.1f}%")
@@ -689,10 +724,15 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
             
             if companies_with_websites > 0:
                 st.info(f"🌐 **{website_percentage:.1f}%** of companies have websites listed")
+            
+            # LinkedIn-only companies insight
+            if linkedin_only_count > 0:
+                st.info(f"🔗 **{linkedin_only_count}** companies discovered only on LinkedIn")
         
         with insight_col2:
             # Show top companies with YC mentions (if any)
-            yc_mention_companies = df[df['yc_s25_on_linkedin'] == True]
+            yc_field = 'yc_batch_on_linkedin' if 'yc_batch_on_linkedin' in df.columns else 'yc_s25_on_linkedin'
+            yc_mention_companies = df[df[yc_field] == True]
             if len(yc_mention_companies) > 0:
                 st.success(f"✅ **{len(yc_mention_companies)}** companies actively promote their YC {current_batch} status")
             
@@ -704,6 +744,18 @@ def display_company_table(df: pd.DataFrame, original_count: int = None):
             ])
             completeness_rate = (complete_profiles / len(df) * 100) if len(df) > 0 else 0
             st.info(f"📋 **{completeness_rate:.1f}%** have complete profiles")
+            
+            # Discovery coverage insight
+            if 'linkedin_only' in df.columns:
+                yc_api_count = len(df[df['linkedin_only'] == False])
+                if linkedin_only_count > 0 and yc_api_count > 0:
+                    discovery_boost = (linkedin_only_count / yc_api_count * 100)
+                    st.success(f"🚀 **+{discovery_boost:.1f}%** more companies found via LinkedIn discovery")
+            else:
+                # If no linkedin_only column exists, all companies are from YC API
+                if linkedin_only_count > 0:
+                    discovery_boost = (linkedin_only_count / len(df) * 100)
+                    st.success(f"🚀 **+{discovery_boost:.1f}%** more companies found via LinkedIn discovery")
 
 def refresh_data(season: str = "Summer", year: int = 2025) -> bool:
     """
@@ -763,7 +815,8 @@ def refresh_data(season: str = "Summer", year: int = 2025) -> bool:
         progress_bar.progress(30)
         
         try:
-            result = processor.process_new_companies()
+            # Enable LinkedIn discovery by default (can be made configurable later)
+            result = processor.process_new_companies(enable_linkedin_discovery=True)
             logger.info(f"Processing completed: success={result.success}, new_companies={result.new_companies_count}")
         except KeyboardInterrupt:
             logger.warning("Processing interrupted by user")
@@ -790,7 +843,8 @@ def refresh_data(season: str = "Summer", year: int = 2025) -> bool:
                     data_manager = DataManager()
                     df = data_manager.load_existing_data()
                     if not df.empty:
-                        yc_mentions = len(df[df['yc_s25_on_linkedin'] == True])
+                        yc_field = 'yc_batch_on_linkedin' if 'yc_batch_on_linkedin' in df.columns else 'yc_s25_on_linkedin'
+                        yc_mentions = len(df[df[yc_field] == True])
                         if yc_mentions > 0:
                             current_batch = _detect_current_batch()
                             st.info(f"🎯 Found {yc_mentions} companies with YC {current_batch} LinkedIn mentions!")
@@ -913,10 +967,12 @@ def main():
     
     with col2:
         current_year = datetime.now().year
+        # Only show current year and previous years, not future years
+        max_year = current_year if current_year >= 2025 else 2025
         year = st.selectbox(
             "📆 Year", 
-            options=list(range(current_year + 1, 2019, -1)),  # 2025 down to 2020
-            index=0,  # Default to current/next year
+            options=list(range(max_year, 2019, -1)),  # Current year down to 2020
+            index=0,  # Default to current year
             help="Select YC batch year"
         )
     
@@ -965,8 +1021,8 @@ def main():
                 current_batch = _detect_current_batch()
                 linkedin_filter = st.selectbox(
                     "🔗 LinkedIn Status",
-                    options=["All", "Has LinkedIn", "No LinkedIn", f"YC {current_batch} Mention", "No YC Mention"],
-                    help="Filter by LinkedIn presence and YC mentions"
+                    options=["All", "Has LinkedIn", "No LinkedIn", "LinkedIn-only Companies", "YC API Companies", f"YC {current_batch} Mention", "No YC Mention"],
+                    help="Filter by LinkedIn presence, company source, and YC mentions"
                 )
             
             with filter_col3:

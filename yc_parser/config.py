@@ -16,16 +16,24 @@ logger = logging.getLogger(__name__)
 @dataclass
 class AppConfig:
     """Application configuration settings."""
-    name: str = "YC S25 Company Parser"
+    name: str = "YC Company Parser"
     version: str = "1.0.0"
     environment: str = "production"
     debug: bool = False
 
 
 @dataclass
+class BatchConfig:
+    """YC batch configuration settings."""
+    default_season: str = "Summer"
+    default_year: int = 2025
+    default_batch_code: str = "S25"  # Will be auto-generated from season/year if not specified
+
+
+@dataclass
 class DataConfig:
     """Data storage configuration settings."""
-    csv_file_path: str = "yc_s25_companies.csv"
+    csv_file_path: str = "yc_{batch}_companies.csv"  # Will be formatted with batch
     backup_directory: str = "data_backups"
     backup_retention_days: int = 30
     auto_backup: bool = True
@@ -38,7 +46,7 @@ class ProcessingConfig:
     max_workers: int = 3
     batch_size: int = 10
     enable_resume: bool = True
-    resume_state_file: str = "yc_s25_companies_resume_state.json"
+    resume_state_file: str = "yc_{batch}_companies_resume_state.json"  # Will be formatted with batch
     validate_on_startup: bool = True
     auto_repair_data: bool = False
 
@@ -59,8 +67,9 @@ class RateLimitingConfig:
 class YcApiConfig:
     """YC API configuration settings."""
     base_url: str = "https://www.ycombinator.com"
-    api_endpoint: str = "/companies/summer-2025.json"
-    user_agent: str = "YC S25 Company Parser/1.0"
+    api_base: str = "https://yc-oss.github.io/api/batches"
+    api_endpoint_template: str = "{season_lower}-{year}.json"  # Will be formatted with season/year
+    user_agent: str = "YC Company Parser/1.0"
     headers: Dict[str, str] = field(default_factory=lambda: {
         "Accept": "application/json",
         "Accept-Language": "en-US,en;q=0.9"
@@ -86,6 +95,23 @@ class LinkedInConfig:
 
 
 @dataclass
+class LinkedInDiscoveryConfig:
+    """LinkedIn discovery configuration settings."""
+    default_batch: str = "S25"
+    search_query_template: str = "site:linkedin.com {company_name} YC {batch}"
+    max_results_per_search: int = 10
+    confidence_threshold: float = 0.7
+    enable_fuzzy_matching: bool = True
+    fuzzy_match_threshold: float = 0.8
+    search_delay_min: float = 2.0
+    search_delay_max: float = 4.0
+    max_retries: int = 3
+    retry_delay: float = 5.0
+    normalize_company_names: bool = True
+    skip_existing_linkedin_urls: bool = True
+
+
+@dataclass
 class LoggingConfig:
     """Logging configuration settings."""
     level: str = "INFO"
@@ -102,7 +128,7 @@ class LoggingConfig:
 @dataclass
 class StreamlitConfig:
     """Streamlit application configuration."""
-    page_title: str = "YC S25 Company Parser"
+    page_title: str = "YC Company Parser"
     page_icon: str = ""
     layout: str = "wide"
     show_error_recovery: bool = True
@@ -168,11 +194,13 @@ class DevelopmentConfig:
 class Config:
     """Main configuration container."""
     app: AppConfig = field(default_factory=AppConfig)
+    batch: BatchConfig = field(default_factory=BatchConfig)
     data: DataConfig = field(default_factory=DataConfig)
     processing: ProcessingConfig = field(default_factory=ProcessingConfig)
     rate_limiting: RateLimitingConfig = field(default_factory=RateLimitingConfig)
     yc_api: YcApiConfig = field(default_factory=YcApiConfig)
     linkedin: LinkedInConfig = field(default_factory=LinkedInConfig)
+    linkedin_discovery: LinkedInDiscoveryConfig = field(default_factory=LinkedInDiscoveryConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     streamlit: StreamlitConfig = field(default_factory=StreamlitConfig)
     health_check: HealthCheckConfig = field(default_factory=HealthCheckConfig)
@@ -208,6 +236,11 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
             'environment': default_config.app.environment,
             'debug': default_config.app.debug
         },
+        'batch': {
+            'default_season': default_config.batch.default_season,
+            'default_year': default_config.batch.default_year,
+            'default_batch_code': default_config.batch.default_batch_code
+        },
         'data': {
             'csv_file_path': default_config.data.csv_file_path,
             'backup_directory': default_config.data.backup_directory,
@@ -234,13 +267,28 @@ def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
         },
         'yc_api': {
             'base_url': default_config.yc_api.base_url,
-            'api_endpoint': default_config.yc_api.api_endpoint,
+            'api_base': default_config.yc_api.api_base,
+            'api_endpoint_template': default_config.yc_api.api_endpoint_template,
             'user_agent': default_config.yc_api.user_agent,
             'headers': default_config.yc_api.headers
         },
         'linkedin': {
             'user_agents': default_config.linkedin.user_agents,
             'headers': default_config.linkedin.headers
+        },
+        'linkedin_discovery': {
+            'default_batch': default_config.linkedin_discovery.default_batch,
+            'search_query_template': default_config.linkedin_discovery.search_query_template,
+            'max_results_per_search': default_config.linkedin_discovery.max_results_per_search,
+            'confidence_threshold': default_config.linkedin_discovery.confidence_threshold,
+            'enable_fuzzy_matching': default_config.linkedin_discovery.enable_fuzzy_matching,
+            'fuzzy_match_threshold': default_config.linkedin_discovery.fuzzy_match_threshold,
+            'search_delay_min': default_config.linkedin_discovery.search_delay_min,
+            'search_delay_max': default_config.linkedin_discovery.search_delay_max,
+            'max_retries': default_config.linkedin_discovery.max_retries,
+            'retry_delay': default_config.linkedin_discovery.retry_delay,
+            'normalize_company_names': default_config.linkedin_discovery.normalize_company_names,
+            'skip_existing_linkedin_urls': default_config.linkedin_discovery.skip_existing_linkedin_urls
         },
         'logging': {
             'level': default_config.logging.level,
@@ -348,6 +396,72 @@ def _deep_merge(base_dict: Dict[str, Any], update_dict: Dict[str, Any]) -> Dict[
             result[key] = value
     
     return result
+
+
+def generate_batch_code(season: str, year: int) -> str:
+    """
+    Generate batch code from season and year.
+    
+    Args:
+        season: "Summer" or "Winter"
+        year: Year (e.g., 2025, 2024)
+        
+    Returns:
+        Batch code like "S25", "W24"
+    """
+    season_code = "S" if season.lower() == "summer" else "W"
+    year_short = str(year)[-2:]  # Last 2 digits
+    return f"{season_code}{year_short}"
+
+
+def parse_batch_code(batch_code: str) -> tuple[str, int]:
+    """
+    Parse batch code into season and year.
+    
+    Args:
+        batch_code: Batch code like "S25", "W24"
+        
+    Returns:
+        Tuple of (season, year)
+    """
+    if len(batch_code) < 3:
+        raise ValueError(f"Invalid batch code format: {batch_code}")
+    
+    season_code = batch_code[0].upper()
+    year_short = batch_code[1:]
+    
+    season = "Summer" if season_code == "S" else "Winter"
+    year = int(f"20{year_short}")
+    
+    return season, year
+
+
+def format_config_paths(config: Dict[str, Any], batch_code: str) -> Dict[str, Any]:
+    """
+    Format configuration paths with batch code.
+    
+    Args:
+        config: Configuration dictionary
+        batch_code: Batch code like "S25", "W24"
+        
+    Returns:
+        Configuration with formatted paths
+    """
+    config = config.copy()
+    
+    # Format data file path
+    if 'data' in config and 'csv_file_path' in config['data']:
+        config['data']['csv_file_path'] = config['data']['csv_file_path'].format(
+            batch=batch_code.lower()
+        )
+    
+    # Format resume state file path
+    if 'processing' in config and 'resume_state_file' in config['processing']:
+        config['processing']['resume_state_file'] = config['processing']['resume_state_file'].format(
+            batch=batch_code.lower()
+        )
+    
+    return config
 
 
 def validate_config(config: Dict[str, Any]) -> List[str]:

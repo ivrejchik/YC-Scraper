@@ -1,6 +1,6 @@
 # YC Company Parser
 
-A comprehensive tool to fetch and analyze Y Combinator companies with advanced filtering, sorting, and LinkedIn integration.
+A comprehensive tool to fetch and analyze Y Combinator companies across different batches with advanced filtering, sorting, and LinkedIn integration.
 
 ## Quick Start
 
@@ -73,6 +73,72 @@ streamlit run app.py
 │   └── models.py            # Data models and validation
 ├── test_*.py                # Unit tests
 └── yc_s25_companies.csv     # Generated data file
+```
+
+## Command Line Interface
+
+The parser includes a powerful CLI for batch operations and automation:
+
+### Basic Usage
+
+```bash
+# Process companies for default batch (S25)
+python -m yc_parser process
+
+# Process companies for specific batch
+python -m yc_parser process --batch W25
+python -m yc_parser process --batch S24
+
+# Show statistics for a batch
+python -m yc_parser stats --batch W25
+
+# Validate data integrity
+python -m yc_parser validate --batch S25 --repair
+
+# Create backup
+python -m yc_parser backup --batch W25 --name "pre_update_backup"
+
+# Discover LinkedIn profiles
+python -m yc_parser discover --batch S25 --dry-run
+```
+
+### Available Commands
+
+| Command | Description | Batch Support |
+|---------|-------------|---------------|
+| `process` | Process new companies and update dataset | ✅ `--batch` |
+| `stats` | Show dataset statistics | ✅ `--batch` |
+| `validate` | Validate data integrity with optional repair | ✅ `--batch` |
+| `backup` | Create data backup | ✅ `--batch` |
+| `discover` | Discover LinkedIn profiles for YC companies | ✅ `--batch` |
+| `clear-resume` | Clear resume data from interrupted sessions | ✅ `--batch` |
+| `health` | Run system health checks | ❌ |
+
+### Batch Code Format
+
+- **S25** = Summer 2025
+- **W25** = Winter 2025  
+- **S24** = Summer 2024
+- **W24** = Winter 2024
+- And so on...
+
+### Examples
+
+```bash
+# Process Winter 2024 companies
+python -m yc_parser process --batch W24 --verbose
+
+# Get stats for Summer 2023
+python -m yc_parser stats --batch S23
+
+# Backup current S25 data before major update
+python -m yc_parser backup --batch S25 --name "before_linkedin_update"
+
+# Validate and repair W25 data
+python -m yc_parser validate --batch W25 --repair
+
+# Test LinkedIn discovery for S24 without saving
+python -m yc_parser discover --batch S24 --dry-run --verbose
 ```
 
 ## Running Tests

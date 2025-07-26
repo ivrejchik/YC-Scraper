@@ -1,11 +1,9 @@
 """
-Data models and validation functions for the YC S25 Company Parser.
+Data models and validation functions for the YC Company Parser.
 
-This module contains the core data structures used throughout the application,
-including Company and ProcessingResult dataclasses with serialization methods
-and data validation functions.
+This module defines the core data structures for representing YC companies
+and processing results.
 """
-
 from dataclasses import dataclass, asdict
 from datetime import datetime
 from typing import Dict, Any, List, Optional
@@ -24,7 +22,8 @@ class Company:
         description: One-line company description
         yc_page: YC profile URL
         linkedin_url: LinkedIn company page URL
-        yc_s25_on_linkedin: Whether "YC S25" appears on LinkedIn
+        yc_batch_on_linkedin: Whether YC batch appears on LinkedIn (e.g., "YC S25", "YC W24")
+        linkedin_only: Whether company was discovered only on LinkedIn (not in YC API)
         last_updated: ISO timestamp of last check
     """
     name: str
@@ -32,7 +31,8 @@ class Company:
     description: str
     yc_page: str
     linkedin_url: str
-    yc_s25_on_linkedin: bool
+    yc_batch_on_linkedin: bool
+    linkedin_only: bool
     last_updated: str
     
     def to_dict(self) -> Dict[str, Any]:
@@ -42,13 +42,20 @@ class Company:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'Company':
         """Create Company instance from dictionary."""
+        # Handle backward compatibility for LinkedIn field names
+        yc_batch_value = data.get('yc_batch_on_linkedin')
+        if yc_batch_value is None:
+            # Fall back to old field name for backward compatibility
+            yc_batch_value = data.get('yc_s25_on_linkedin', False)
+        
         return cls(
             name=str(data.get('name', '')),
             website=str(data.get('website', '')),
             description=str(data.get('description', '')),
             yc_page=str(data.get('yc_page', '')),
             linkedin_url=str(data.get('linkedin_url', '')),
-            yc_s25_on_linkedin=bool(data.get('yc_s25_on_linkedin', False)),
+            yc_batch_on_linkedin=bool(yc_batch_value),
+            linkedin_only=bool(data.get('linkedin_only', False)),
             last_updated=str(data.get('last_updated', datetime.now().isoformat()))
         )
     
@@ -106,7 +113,7 @@ def validate_company_data(data: Dict[str, Any]) -> List[str]:
     errors = []
     
     # Validate required fields
-    required_fields = ['name', 'website', 'description', 'yc_page', 'linkedin_url', 'yc_s25_on_linkedin', 'last_updated']
+    required_fields = ['name', 'website', 'description', 'yc_page', 'linkedin_url', 'yc_batch_on_linkedin', 'linkedin_only', 'last_updated']
     for field in required_fields:
         if field not in data:
             errors.append(f"Missing required field: {field}")
@@ -256,7 +263,8 @@ def create_company_from_yc_data(yc_data: Dict[str, Any]) -> Company:
         description=yc_data.get('one_liner', ''),
         yc_page=yc_data.get('yc_page', ''),
         linkedin_url=yc_data.get('linkedin_url', ''),
-        yc_s25_on_linkedin=False,  # Default to False, will be updated by LinkedIn scraper
+        yc_batch_on_linkedin=False,  # Default to False, will be updated by LinkedIn scraper
+        linkedin_only=False,  # YC API companies are not LinkedIn-only
         last_updated=datetime.now().isoformat()
     )
 
