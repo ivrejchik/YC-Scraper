@@ -57,9 +57,19 @@ class DataManager:
             if not self._validate_dataframe_structure(df):
                 raise ValueError("CSV file has invalid structure")
             
-            # Convert boolean column if it exists as string
+            # Convert boolean columns if they exist as strings
             if 'yc_s25_on_linkedin' in df.columns:
                 df['yc_s25_on_linkedin'] = df['yc_s25_on_linkedin'].astype(bool)
+            if 'yc_batch_on_linkedin' in df.columns:
+                df['yc_batch_on_linkedin'] = df['yc_batch_on_linkedin'].astype(bool)
+            
+            # Handle backward compatibility for LinkedIn field names
+            if 'yc_batch_on_linkedin' in df.columns and 'yc_s25_on_linkedin' not in df.columns:
+                # New field exists, create alias for old field name for compatibility
+                df['yc_s25_on_linkedin'] = df['yc_batch_on_linkedin']
+            elif 'yc_s25_on_linkedin' in df.columns and 'yc_batch_on_linkedin' not in df.columns:
+                # Old field exists, create new field name
+                df['yc_batch_on_linkedin'] = df['yc_s25_on_linkedin']
             
             return df
             
@@ -238,8 +248,11 @@ class DataManager:
         recent_threshold = sorted_group['last_updated_dt'].max() - pd.Timedelta(days=30)
         recent_entries = sorted_group[sorted_group['last_updated_dt'] >= recent_threshold]
         
-        if any(recent_entries['yc_s25_on_linkedin']):
-            resolved['yc_s25_on_linkedin'] = True
+        # Handle both LinkedIn field names for backward compatibility
+        linkedin_flags = ['yc_s25_on_linkedin', 'yc_batch_on_linkedin']
+        for flag_name in linkedin_flags:
+            if flag_name in recent_entries.columns and any(recent_entries[flag_name]):
+                resolved[flag_name] = True
         
         # Remove helper column
         if 'last_updated_dt' in resolved.index:
@@ -351,23 +364,30 @@ class DataManager:
         """Create empty DataFrame with proper column structure."""
         columns = [
             'name', 'website', 'description', 'yc_page', 
-            'linkedin_url', 'yc_s25_on_linkedin', 'linkedin_only', 'last_updated'
+            'linkedin_url', 'yc_batch_on_linkedin', 'yc_s25_on_linkedin', 'linkedin_only', 'last_updated'
         ]
         return pd.DataFrame(columns=columns)
     
     def _validate_dataframe_structure(self, df: pd.DataFrame) -> bool:
         """Validate that DataFrame has the expected column structure."""
-        expected_columns = {
+        # Core required columns that must be present
+        core_required_columns = {
             'name', 'website', 'description', 'yc_page', 
-            'linkedin_url', 'yc_s25_on_linkedin', 'linkedin_only', 'last_updated'
+            'linkedin_url', 'last_updated'
         }
-        # Allow for backward compatibility - if linkedin_only is missing, that's okay
+        
         df_columns = set(df.columns)
-        required_columns = {
-            'name', 'website', 'description', 'yc_page', 
-            'linkedin_url', 'yc_s25_on_linkedin', 'last_updated'
-        }
-        return required_columns.issubset(df_columns)
+        
+        # Check that core columns are present
+        if not core_required_columns.issubset(df_columns):
+            return False
+        
+        # At least one of the LinkedIn boolean fields must be present for backward compatibility
+        linkedin_fields = {'yc_batch_on_linkedin', 'yc_s25_on_linkedin'}
+        if not linkedin_fields.intersection(df_columns):
+            return False
+        
+        return True
     
     def _validate_dataframe_data(self, df: pd.DataFrame) -> List[str]:
         """Validate data in each row of DataFrame."""
@@ -386,14 +406,28 @@ class DataManager:
         if df.empty:
             return self._create_empty_dataframe()
         
-        # Ensure proper column order
+        # Handle backward compatibility for LinkedIn field names
+        df_working = df.copy()
+        
+        # If we have yc_batch_on_linkedin but not yc_s25_on_linkedin, create the old field for compatibility
+        if 'yc_batch_on_linkedin' in df_working.columns and 'yc_s25_on_linkedin' not in df_working.columns:
+            df_working['yc_s25_on_linkedin'] = df_working['yc_batch_on_linkedin']
+        # If we have yc_s25_on_linkedin but not yc_batch_on_linkedin, create the new field
+        elif 'yc_s25_on_linkedin' in df_working.columns and 'yc_batch_on_linkedin' not in df_working.columns:
+            df_working['yc_batch_on_linkedin'] = df_working['yc_s25_on_linkedin']
+        # If neither exists, create both with default values
+        elif 'yc_batch_on_linkedin' not in df_working.columns and 'yc_s25_on_linkedin' not in df_working.columns:
+            df_working['yc_batch_on_linkedin'] = False
+            df_working['yc_s25_on_linkedin'] = False
+        
+        # Ensure proper column order - include both fields for full compatibility
         column_order = [
             'name', 'website', 'description', 'yc_page', 
-            'linkedin_url', 'yc_s25_on_linkedin', 'linkedin_only', 'last_updated'
+            'linkedin_url', 'yc_batch_on_linkedin', 'yc_s25_on_linkedin', 'linkedin_only', 'last_updated'
         ]
         
         # Reorder columns and ensure all required columns exist
-        df_prepared = df.reindex(columns=column_order)
+        df_prepared = df_working.reindex(columns=column_order)
         
         # Fill missing columns with default values
         df_prepared['name'] = df_prepared['name'].fillna('')
@@ -401,6 +435,7 @@ class DataManager:
         df_prepared['description'] = df_prepared['description'].fillna('')
         df_prepared['yc_page'] = df_prepared['yc_page'].fillna('')
         df_prepared['linkedin_url'] = df_prepared['linkedin_url'].fillna('')
+        df_prepared['yc_batch_on_linkedin'] = df_prepared['yc_batch_on_linkedin'].fillna(False)
         df_prepared['yc_s25_on_linkedin'] = df_prepared['yc_s25_on_linkedin'].fillna(False)
         df_prepared['linkedin_only'] = df_prepared['linkedin_only'].fillna(False)
         df_prepared['last_updated'] = df_prepared['last_updated'].fillna(datetime.now().isoformat())
@@ -538,16 +573,20 @@ class DataManager:
                     warnings.append(f"Found {long_descriptions.sum()} descriptions over 500 characters, truncating")
                     cleaned_df.loc[long_descriptions, 'description'] = cleaned_df.loc[long_descriptions, 'description'].str[:500]
             
-            # Clean boolean column
+            # Clean boolean columns
+            bool_map = {
+                'true': True, 'True': True, 'TRUE': True, '1': True, 1: True,
+                'false': False, 'False': False, 'FALSE': False, '0': False, 0: False,
+                'nan': False, 'None': False, 'null': False, '': False
+            }
+            
             if 'yc_s25_on_linkedin' in cleaned_df.columns:
-                # Convert various representations to boolean
-                bool_map = {
-                    'true': True, 'True': True, 'TRUE': True, '1': True, 1: True,
-                    'false': False, 'False': False, 'FALSE': False, '0': False, 0: False,
-                    'nan': False, 'None': False, 'null': False, '': False
-                }
-                
                 cleaned_df['yc_s25_on_linkedin'] = cleaned_df['yc_s25_on_linkedin'].map(
+                    lambda x: bool_map.get(str(x), False)
+                )
+            
+            if 'yc_batch_on_linkedin' in cleaned_df.columns:
+                cleaned_df['yc_batch_on_linkedin'] = cleaned_df['yc_batch_on_linkedin'].map(
                     lambda x: bool_map.get(str(x), False)
                 )
             
